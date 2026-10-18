@@ -4,6 +4,7 @@ package server
 
 import (
 	"context"
+	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
@@ -29,6 +30,7 @@ import (
 	"github.com/micromdm/nanomdm/fleetcore/osreleases"
 	"github.com/micromdm/nanomdm/fleetcore/pki"
 	"github.com/micromdm/nanomdm/fleetcore/schemas"
+	"github.com/micromdm/nanomdm/fleetcore/seal"
 	httpapi "github.com/micromdm/nanomdm/http/api"
 	httpmdm "github.com/micromdm/nanomdm/http/mdm"
 	"github.com/micromdm/nanomdm/push/nanopush"
@@ -87,8 +89,11 @@ type Config struct {
 	// AllowRetroactive lets a device that enrolled before certificates were checked be associated with one on its next check-in.
 	AllowRetroactive bool
 
-	// APIKey enables the management API under /v1 (HTTP basic auth, user "fleetcore"); empty disables it.
+	// APIKey enables the management API under /v1 (HTTP basic auth, user "fleetcore"); empty disables it unless AdminCA is set.
 	APIKey string
+	// AdminCA, if set, makes the management API require a client certificate that chains to it (mutual TLS: the strongest way for an operator or a control plane to reach a tenant's
+	// server, with no shared secret). With APIKey as well, both are required. The server must terminate TLS itself for this (the certificate is read from the connection).
+	AdminCA *x509.CertPool
 	// PushURL overrides the APNs server (tests).
 	PushURL string
 	// WebhookURL receives every MDM event; WebhookHMACKey signs them.
@@ -99,6 +104,9 @@ type Config struct {
 	// EnrollAuthorize, if set, decides who may download an enrollment profile (a code, an invite, a session).
 	EnrollAuthorize func(*http.Request) error
 
+	// Sealer seals secrets at rest with this tenant's key (seal.Keyring.For(tenant), or seal.ForTenantKeys when the server holds only its tenant's key). Without one, secrets are stored as
+	// given: development only. Give the same sealer to the MongoDB storage (mongodb.WithSealer), which the server does not create.
+	Sealer seal.Interface
 	// NoFeeds stops the server from reaching out to Apple (the device-management schemas on GitHub, the OS releases feed). The built-in snapshot is used.
 	NoFeeds bool
 
@@ -118,6 +126,9 @@ type Server struct {
 	DEP *dep.Service
 	// Blueprints keeps devices matching their blueprints; Run starts it.
 	Blueprints *blueprints.Engine
+	sealer     seal.Interface
+	bpStore    *blueprints.Store
+	ddmStore   *ddm.Store
 	releases   *osreleases.Refresher
 	schemaFeed *schemas.Refresher
 	cfg        Config
@@ -191,6 +202,11 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("declarative management: %w", err)
 	}
+	// Secrets are sealed with the tenant's key when a keyring is configured.
+	sealer := cfg.Sealer
+	if sealer != nil {
+		ddmStore.Sealer = sealer
+	}
 	ddmSvc := &ddm.Service{Store: ddmStore}
 	nano := nanomdm.New(cfg.Storage,
 		nanomdm.WithDeclarativeManagement(ddmSvc),
@@ -208,6 +224,7 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("blueprints: %w", err)
 	}
+	bpStore.Sealer = sealer
 	profileRules, err := applicability.NewRegistry(ctx, cfg.PKIDB, cfg.PKITenant)
 	if err != nil {
 		return nil, fmt.Errorf("applicability: %w", err)
@@ -318,22 +335,57 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("ok")) })
 	mux.HandleFunc("/version", nlhttp.NewJSONVersionHandler(cfg.Version))
 
+	// adminAuth guards the management API: a client certificate from the admin CA and/or the API key, and every call is logged with who made it.
+	adminAuth := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			who := ""
+			if cfg.AdminCA != nil {
+				if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
+					http.Error(w, "a client certificate is required", http.StatusUnauthorized)
+					return
+				}
+				leaf := r.TLS.PeerCertificates[0]
+				inter := x509.NewCertPool()
+				for _, c := range r.TLS.PeerCertificates[1:] {
+					inter.AddCert(c)
+				}
+				if _, err := leaf.Verify(x509.VerifyOptions{Roots: cfg.AdminCA, Intermediates: inter, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}}); err != nil {
+					http.Error(w, "the client certificate is not accepted", http.StatusUnauthorized)
+					return
+				}
+				who = leaf.Subject.String()
+			}
+			if cfg.APIKey != "" {
+				_, pass, ok := r.BasicAuth()
+				if !ok || subtle.ConstantTimeCompare([]byte(pass), []byte(cfg.APIKey)) != 1 {
+					w.Header().Set("WWW-Authenticate", `Basic realm="fleetcore"`)
+					http.Error(w, "unauthorized", http.StatusUnauthorized)
+					return
+				}
+				if who == "" {
+					who = "api key"
+				}
+			}
+			logger.Info("msg", "admin api", "who", who, "method", r.Method, "path", r.URL.Path)
+			next.ServeHTTP(w, r)
+		})
+	}
+
 	// ---- management API ----
 	var depSvc *dep.Service
-	if cfg.APIKey != "" {
+	if cfg.APIKey != "" || cfg.AdminCA != nil {
 		depStore, err := dep.New(ctx, cfg.PKIDB, cfg.PKITenant, cfg.CAPass)
 		if err != nil {
 			return nil, fmt.Errorf("dep storage: %w", err)
 		}
+		depStore.Sealer = sealer
 		if depSvc, err = dep.NewService(ctx, cfg.PKIDB, depStore, cfg.PKITenant, logger.With("service", "dep")); err != nil {
 			return nil, fmt.Errorf("dep service: %w", err)
 		}
-		mux.Handle("/v1/dep/", nlhttp.NewSimpleBasicAuthHandler(depSvc.Handler("/v1/dep"), "fleetcore", cfg.APIKey, "fleetcore"))
+		mux.Handle("/v1/dep/", adminAuth(depSvc.Handler("/v1/dep")))
 
 		apiAuth := nlhttp.NewMWMux(mux)
-		apiAuth.Use(func(h http.Handler) http.Handler {
-			return nlhttp.NewSimpleBasicAuthHandler(h, "fleetcore", cfg.APIKey, "fleetcore")
-		})
+		apiAuth.Use(func(h http.Handler) http.Handler { return adminAuth(h) })
 		httpapi.HandleAPIv1("/v1", apiAuth, logger, cfg.Storage, ps)
 
 		// ---- JSON command API ----
@@ -347,18 +399,18 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		if err != nil {
 			return nil, fmt.Errorf("command api: %w", err)
 		}
-		mux.Handle("/v1/commands", nlhttp.NewSimpleBasicAuthHandler(ch, "fleetcore", cfg.APIKey, "fleetcore"))
-		mux.Handle("/v1/commands/", nlhttp.NewSimpleBasicAuthHandler(ch, "fleetcore", cfg.APIKey, "fleetcore"))
+		mux.Handle("/v1/commands", adminAuth(ch))
+		mux.Handle("/v1/commands/", adminAuth(ch))
 
 		// ---- blueprints, groups, devices, platform applicability, schemas, OS releases ----
 		bpAPI := &blueprints.API{Engine: engine, Applicability: profileRules, OSReleases: relFeed, SchemaRefresher: schemaFeed}
-		bpHandler := nlhttp.NewSimpleBasicAuthHandler(http.StripPrefix("/v1", bpAPI.Handler()), "fleetcore", cfg.APIKey, "fleetcore")
+		bpHandler := adminAuth(http.StripPrefix("/v1", bpAPI.Handler()))
 		for _, p := range []string{"/v1/blueprints", "/v1/blueprints/", "/v1/groups", "/v1/groups/", "/v1/devices/", "/v1/applicability", "/v1/applicability/", "/v1/schemas", "/v1/schemas/", "/v1/os-releases", "/v1/os-releases/", "/v1/ddm/"} {
 			mux.Handle(p, bpHandler)
 		}
 	}
 
-	return &Server{Handler: trace.NewTraceLoggingHandler(mux, logger.With("handler", "log"), newTraceID), CAPool: pool, Depot: depot, DEP: depSvc, Blueprints: engine, releases: relFeed, schemaFeed: schemaFeed, cfg: cfg}, nil
+	return &Server{Handler: trace.NewTraceLoggingHandler(mux, logger.With("handler", "log"), newTraceID), CAPool: pool, Depot: depot, DEP: depSvc, Blueprints: engine, sealer: sealer, bpStore: bpStore, ddmStore: ddmStore, releases: relFeed, schemaFeed: schemaFeed, cfg: cfg}, nil
 }
 
 // TLSConfig for a listener that terminates TLS here: the given certificate (a public one devices trust), and a request for a client certificate, which is checked by the MDM handlers
@@ -429,6 +481,35 @@ func (a resultAdapter) CommandResults(ctx context.Context, uuid string) ([]comma
 	out := make([]commands.Result, len(rows))
 	for i, r := range rows {
 		out[i] = commands.Result{ID: r.ID, Status: r.Status, QueuedAt: r.QueuedAt, ResultAt: r.ResultAt, Result: r.Result}
+	}
+	return out, nil
+}
+
+// Rekey seals every stored secret with the current master key: values written before sealing was configured, and those under an older key after a rotation. It reports how many
+// documents each store changed. It is safe to run again, and while the server runs.
+func (s *Server) Rekey(ctx context.Context) (map[string]int, error) {
+	if s.sealer == nil {
+		return nil, errors.New("no master key is configured: nothing to seal with")
+	}
+	out := map[string]int{}
+	var err error
+	if out["blueprints"], err = s.bpStore.RewrapBlueprints(ctx); err != nil {
+		return out, fmt.Errorf("blueprints: %w", err)
+	}
+	if out["declarations"], err = s.ddmStore.Rewrap(ctx); err != nil {
+		return out, fmt.Errorf("declarations: %w", err)
+	}
+	if s.DEP != nil {
+		if out["dep"], err = s.DEP.Store.Rewrap(ctx); err != nil {
+			return out, fmt.Errorf("dep: %w", err)
+		}
+	}
+	if r, ok := s.cfg.Storage.(interface {
+		Rewrap(context.Context) (int, error)
+	}); ok {
+		if out["mdm"], err = r.Rewrap(ctx); err != nil {
+			return out, fmt.Errorf("mdm storage: %w", err)
+		}
 	}
 	return out, nil
 }

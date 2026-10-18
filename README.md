@@ -4,6 +4,10 @@
 
 NanoMDM is a minimalist [Apple MDM](https://developer.apple.com/documentation/devicemanagement) server and library heavily inspired by [MicroMDM](https://github.com/micromdm/micromdm).
 
+## fleetcore
+
+This fork also contains **fleetcore**, a complete Apple MDM in one binary on MongoDB (SCEP, ADE, JSON command API, blueprints, declarative device management, software update enforcement). See [docs/fleetcore.md](docs/fleetcore.md) and [docs/fleetcore-roadmap.md](docs/fleetcore-roadmap.md).
+
 ## Getting started & Documentation
 
 - [Quickstart](docs/quickstart.md)  

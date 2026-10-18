@@ -32,6 +32,7 @@ func (s *MongoDBStorage) CommandResults(ctx context.Context, commandUUID string)
 		CreatedAt time.Time `bson:"created_at"`
 		ResultAt  time.Time `bson:"result_at"`
 		ResultDoc bson.M    `bson:"result_doc"`
+		Result    string    `bson:"result"`
 	}
 	if err := cur.All(ctx, &rows); err != nil {
 		return nil, err
@@ -46,8 +47,18 @@ func (s *MongoDBStorage) CommandResults(ctx context.Context, commandUUID string)
 			t := r.ResultAt
 			cr.ResultAt = &t
 		}
-		if r.ResultDoc != nil {
+		switch {
+		case r.ResultDoc != nil:
 			cr.Result, _ = jsonSafe(r.ResultDoc).(map[string]any)
+		case r.Result != "" && s.sealer != nil:
+			// Sealed: there is no stored copy to read; open the plist and convert it.
+			raw, err := s.open("mdm.result", r.Result)
+			if err != nil {
+				return nil, err
+			}
+			if d, ok := plistDoc(raw).(bson.M); ok {
+				cr.Result, _ = jsonSafe(d).(map[string]any)
+			}
 		}
 		out = append(out, cr)
 	}

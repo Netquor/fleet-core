@@ -8,8 +8,10 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -249,8 +251,14 @@ func (c *ChallengeStore) SCEPChallenge() (string, error) {
 		return "", err
 	}
 	pw := base64.RawURLEncoding.EncodeToString(b)
-	_, err := c.d.db.Collection(cChallenges).InsertOne(context.Background(), c.d.stamp(bson.D{{Key: "_id", Value: c.d.key(pw)}, {Key: "expires_at", Value: time.Now().Add(c.ttl)}}))
+	// Only a hash of the challenge is stored: a copy of the database cannot be used to enroll a device.
+	_, err := c.d.db.Collection(cChallenges).InsertOne(context.Background(), c.d.stamp(bson.D{{Key: "_id", Value: c.d.key(challengeHash(pw))}, {Key: "expires_at", Value: time.Now().Add(c.ttl)}}))
 	return pw, err
+}
+
+func challengeHash(pw string) string {
+	h := sha256.Sum256([]byte("fleetcore-challenge\x00" + pw))
+	return hex.EncodeToString(h[:])
 }
 
 // HasChallenge reports whether pw is a live challenge, and uses it up.
@@ -258,7 +266,7 @@ func (c *ChallengeStore) HasChallenge(pw string) (bool, error) {
 	if pw == "" {
 		return false, nil
 	}
-	err := c.d.db.Collection(cChallenges).FindOneAndDelete(context.Background(), bson.D{{Key: "_id", Value: c.d.key(pw)}, {Key: "expires_at", Value: bson.D{{Key: "$gt", Value: time.Now()}}}}).Err()
+	err := c.d.db.Collection(cChallenges).FindOneAndDelete(context.Background(), bson.D{{Key: "_id", Value: c.d.key(challengeHash(pw))}, {Key: "expires_at", Value: bson.D{{Key: "$gt", Value: time.Now()}}}}).Err()
 	if errors.Is(err, mongo.ErrNoDocuments) {
 		return false, nil
 	}

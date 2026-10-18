@@ -16,6 +16,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/micromdm/nanomdm/fleetcore/seal"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
@@ -81,6 +82,8 @@ type Store struct {
 	db  *mongo.Database
 	tid string
 	Now func() time.Time
+	// Sealer, if set, encrypts declaration payloads (they can hold account passwords and the like) and downloads.
+	Sealer seal.Interface
 }
 
 // NewStore returns the store and makes its indexes.
@@ -145,9 +148,13 @@ type row struct {
 	Source     string `bson:"source"`
 }
 
-func (r row) declaration() (Declaration, error) {
+func (s *Store) declaration(r row) (Declaration, error) {
 	d := Declaration{Identifier: r.Identifier, Kind: r.Kind, Type: r.Type, Source: r.Source}
-	return d, json.Unmarshal([]byte(r.Payload), &d.Payload)
+	b, err := seal.Get(s.Sealer, "ddm.payload", r.Payload)
+	if err != nil {
+		return d, err
+	}
+	return d, json.Unmarshal(b, &d.Payload)
 }
 
 // State is what the server knows about a device's sync.
@@ -186,7 +193,11 @@ func (s *Store) Replace(ctx context.Context, device string, ds []Declaration) (c
 		if err != nil {
 			return false, st, err
 		}
-		doc := s.stamp(bson.D{{Key: "device", Value: device}, {Key: "identifier", Value: d.Identifier}, {Key: "kind", Value: d.Kind}, {Key: "type", Value: d.Type}, {Key: "payload", Value: string(b)}, {Key: "token", Value: tok}, {Key: "source", Value: d.Source}})
+		sealed, err := seal.Put(s.Sealer, "ddm.payload", b)
+		if err != nil {
+			return false, st, err
+		}
+		doc := s.stamp(bson.D{{Key: "device", Value: device}, {Key: "identifier", Value: d.Identifier}, {Key: "kind", Value: d.Kind}, {Key: "type", Value: d.Type}, {Key: "payload", Value: sealed}, {Key: "token", Value: tok}, {Key: "source", Value: d.Source}})
 		ops = append(ops, mongo.NewReplaceOneModel().SetFilter(bson.D{{Key: "_id", Value: s.key(device, d.Identifier)}}).SetReplacement(doc).SetUpsert(true))
 	}
 	for id := range old {
@@ -251,7 +262,7 @@ func (s *Store) List(ctx context.Context, device string) ([]Declaration, error) 
 	}
 	out := make([]Declaration, 0, len(rows))
 	for _, r := range rows {
-		d, err := r.declaration()
+		d, err := s.declaration(r)
 		if err != nil {
 			return nil, err
 		}
@@ -271,7 +282,7 @@ func (s *Store) Get(ctx context.Context, device, kind, identifier string) (*Decl
 	if err != nil {
 		return nil, err
 	}
-	d, err := r.declaration()
+	d, err := s.declaration(r)
 	return &d, err
 }
 

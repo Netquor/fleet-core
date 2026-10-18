@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/micromdm/nanomdm/cryptoutil"
@@ -43,6 +44,31 @@ type MongoDBStorage struct {
 	rm     bool
 	owned  bool   // whether Close should disconnect the client
 	tid    string // the tenant, when tenants share collections (empty: this database is the tenant's alone)
+	sealer Sealer
+}
+
+// seal returns what to store for a secret value: the sealed form, or the value itself when sealing is off.
+func (s *MongoDBStorage) seal(purpose string, b []byte) (string, error) {
+	if s.sealer == nil {
+		return string(b), nil
+	}
+	return s.sealer.Seal(purpose, b)
+}
+
+// open reads a stored secret. A value not in the sealed format (written before sealing was on) is returned as it is.
+func (s *MongoDBStorage) open(purpose, stored string) ([]byte, error) {
+	if s.sealer == nil || !(strings.HasPrefix(stored, "s1.") || strings.HasPrefix(stored, "plain:")) {
+		return []byte(stored), nil
+	}
+	return s.sealer.Open(purpose, stored)
+}
+
+// doc is the native BSON copy of a plist; with sealing it is not kept.
+func (s *MongoDBStorage) doc(raw []byte) any {
+	if s.sealer != nil {
+		return nil
+	}
+	return plistDoc(raw)
 }
 
 // pk is the _id of a document that is keyed by an id: the id itself, or the tenant and the id when tenants share collections.
@@ -90,7 +116,20 @@ type config struct {
 	logger log.Logger
 	rm     bool
 	noIdx  bool
+	sealer Sealer
 }
+
+// Sealer encrypts the values that must not sit readable in the database: commands (they carry profiles, with Wi-Fi passwords and credentials), command results (they can carry recovery
+// keys), TokenUpdate messages (they carry the unlock token), bootstrap tokens and push certificate keys. The purpose names the field; a Sealer for one tenant refuses values of another.
+// fleetcore/seal's *Sealer implements it.
+type Sealer interface {
+	Seal(purpose string, plaintext []byte) (string, error)
+	Open(purpose, sealed string) ([]byte, error)
+}
+
+// WithSealer turns on sealing. The native BSON copies of sealed documents are not kept (they would hold the same secrets in the clear), so command and result contents are no longer
+// queryable in the database. Values stored before sealing was on are still read, and are sealed by the rekey command.
+func WithSealer(s Sealer) Option { return func(c *config) { c.sealer = s } }
 
 // Option configures New.
 type Option func(*config)
@@ -123,7 +162,7 @@ func New(ctx context.Context, opts ...Option) (*MongoDBStorage, error) {
 	for _, opt := range opts {
 		opt(cfg)
 	}
-	s := &MongoDBStorage{logger: cfg.logger, rm: cfg.rm, tid: cfg.tenant}
+	s := &MongoDBStorage{logger: cfg.logger, rm: cfg.rm, tid: cfg.tenant, sealer: cfg.sealer}
 	name := cfg.dbName
 	if cfg.client == nil {
 		if cfg.uri == "" {
@@ -259,12 +298,24 @@ func (s *MongoDBStorage) StoreAuthenticate(r *mdm.Request, msg *mdm.Authenticate
 
 func (s *MongoDBStorage) storeDeviceTokenUpdate(r *mdm.Request, msg *mdm.TokenUpdate) error {
 	t := now()
-	set := bson.D{{Key: "token_update", Value: string(msg.Raw)}, {Key: "token_update_doc", Value: plistDoc(msg.Raw)}, {Key: "token_update_at", Value: t}, {Key: "updated_at", Value: t}}
+	rawTU, err := s.seal("mdm.token_update", msg.Raw)
+	if err != nil {
+		return err
+	}
+	set := bson.D{{Key: "token_update", Value: rawTU}, {Key: "token_update_doc", Value: s.doc(msg.Raw)}, {Key: "token_update_at", Value: t}, {Key: "updated_at", Value: t}}
 	// separately store the Unlock Token per MDM spec
 	if len(msg.UnlockToken) > 0 {
-		set = append(set, bson.E{Key: "unlock_token", Value: msg.UnlockToken}, bson.E{Key: "unlock_token_at", Value: t})
+		var unlock any = msg.UnlockToken
+		if s.sealer != nil {
+			enc, err := s.seal("mdm.unlock_token", msg.UnlockToken)
+			if err != nil {
+				return err
+			}
+			unlock = enc
+		}
+		set = append(set, bson.E{Key: "unlock_token", Value: unlock}, bson.E{Key: "unlock_token_at", Value: t})
 	}
-	_, err := s.db.Collection(cDevices).UpdateOne(r.Context(), bson.D{{Key: "_id", Value: s.pk(r.ID)}}, bson.D{{Key: "$set", Value: set}})
+	_, err = s.db.Collection(cDevices).UpdateOne(r.Context(), bson.D{{Key: "_id", Value: s.pk(r.ID)}}, bson.D{{Key: "$set", Value: set}})
 	return err
 }
 
@@ -274,15 +325,19 @@ func (s *MongoDBStorage) storeUserTokenUpdate(r *mdm.Request, msg *mdm.TokenUpda
 		ctxlog.Logger(r.Context(), s.logger).Info("msg", "Unlock Token on user channel not stored")
 	}
 	t := now()
-	_, err := s.db.Collection(cUsers).UpdateOne(r.Context(),
+	rawTU, err := s.seal("mdm.token_update", msg.Raw)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Collection(cUsers).UpdateOne(r.Context(),
 		bson.D{{Key: "_id", Value: s.pk(r.ID)}},
 		bson.D{
 			{Key: "$set", Value: bson.D{
 				{Key: "device_id", Value: r.ParentID},
 				{Key: "user_short_name", Value: nullEmpty(msg.UserShortName)},
 				{Key: "user_long_name", Value: nullEmpty(msg.UserLongName)},
-				{Key: "token_update", Value: string(msg.Raw)},
-				{Key: "token_update_doc", Value: plistDoc(msg.Raw)},
+				{Key: "token_update", Value: rawTU},
+				{Key: "token_update_doc", Value: s.doc(msg.Raw)},
 				{Key: "token_update_at", Value: t},
 				{Key: "updated_at", Value: t},
 			}},
@@ -351,14 +406,19 @@ func (s *MongoDBStorage) StoreUserAuthenticate(r *mdm.Request, msg *mdm.UserAuth
 		col, colAt = "user_authenticate_digest", "user_authenticate_digest_at"
 	}
 	t := now()
-	_, err := s.db.Collection(cUsers).UpdateOne(r.Context(),
+	// The digest response is derived from the user's password: sealed.
+	rawUA, err := s.seal("mdm.user_authenticate", msg.Raw)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Collection(cUsers).UpdateOne(r.Context(),
 		bson.D{{Key: "_id", Value: s.pk(r.ID)}},
 		bson.D{
 			{Key: "$set", Value: bson.D{
 				{Key: "device_id", Value: r.ParentID},
 				{Key: "user_short_name", Value: nullEmpty(msg.UserShortName)},
 				{Key: "user_long_name", Value: nullEmpty(msg.UserLongName)},
-				{Key: col, Value: string(msg.Raw)},
+				{Key: col, Value: rawUA},
 				{Key: colAt, Value: t},
 				{Key: "updated_at", Value: t},
 			}},
@@ -400,6 +460,7 @@ func (s *MongoDBStorage) DeleteTenant(ctx context.Context) (deleted int64, err e
 		return 0, errors.New("DeleteTenant needs a tenant: drop the database when it belongs to one tenant")
 	}
 	for _, c := range []string{cQueue, cCommands, cEnrollments, cUsers, cDevices, cCertAuth, cPushCerts} {
+		// tenant-ok: the filter is the store's own tenant, and a store without one refused above
 		res, err := s.db.Collection(c).DeleteMany(ctx, bson.D{{Key: "t", Value: s.tid}})
 		if err != nil {
 			return deleted, fmt.Errorf("deleting %s: %w", c, err)

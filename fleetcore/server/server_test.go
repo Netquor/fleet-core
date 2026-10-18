@@ -20,6 +20,8 @@ import (
 	"time"
 
 	kitlog "github.com/go-kit/kit/log"
+	"github.com/micromdm/nanomdm/fleetcore/seal"
+	"github.com/micromdm/nanomdm/fleetcore/tenantlint"
 	"github.com/micromdm/nanomdm/storage/mongodb"
 	"github.com/micromdm/plist"
 	scepclient "github.com/micromdm/scep/v2/client"
@@ -40,23 +42,42 @@ func TestEnrollEndToEnd(t *testing.T) {
 		t.Skip("NANOMDM_MONGODB_STORAGE_TEST_URI not set")
 	}
 	ctx := context.Background()
-	mc, err := mongo.Connect(options.Client().ApplyURI(uri))
+	// The server runs as one tenant of a shared database; the tenant check watches every command it sends. The test's own look into the database uses a client of its own.
+	mon := tenantlint.NewMonitor("acme", "os_releases", "schema_sets")
+	mc, err := mongo.Connect(options.Client().ApplyURI(uri).SetMonitor(mon.CommandMonitor()))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer mc.Disconnect(ctx)
-	db := mc.Database("fleetcore_test")
+	peek, err := mongo.Connect(options.Client().ApplyURI(uri))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer peek.Disconnect(ctx)
+	db := peek.Database("fleetcore_test")
+	defer func() {
+		if v := mon.Violations(); len(v) > 0 {
+			t.Errorf("commands that were not scoped to the tenant:\n%s", strings.Join(v, "\n"))
+		}
+		if mon.Checked() < 50 {
+			t.Errorf("the tenant check saw only %d commands", mon.Checked())
+		}
+	}()
 	if err := db.Drop(ctx); err != nil {
 		t.Fatal(err)
 	}
-	store, err := mongodb.New(ctx, mongodb.WithClient(mc), mongodb.WithDatabase("fleetcore_test"))
+	ring, err := seal.NewKeyring(bytes.Repeat([]byte{9}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := mongodb.New(ctx, mongodb.WithClient(mc), mongodb.WithDatabase("fleetcore_test"), mongodb.WithTenant("acme"), mongodb.WithSealer(ring.For("acme")))
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	srv, err := New(ctx, Config{
 		BaseURL: "https://mdm.test", Organization: "Test Org", ProfileIdentifier: "test.mdm.enroll", Topic: "com.apple.mgmt.External.test",
-		Storage: store, PKIDB: db, CAPass: "correct horse", CertSource: CertFromTLS, APIKey: "apikey", Version: "test", NoFeeds: true,
+		Storage: store, PKIDB: mc.Database("fleetcore_test"), PKITenant: "acme", CAPass: "correct horse", CertSource: CertFromTLS, APIKey: "apikey", Version: "test", NoFeeds: true, Sealer: ring.For("acme"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -471,6 +492,29 @@ func TestEnrollEndToEnd(t *testing.T) {
 	}
 	if code, b := api("GET", "/v1/schemas", ""); code != 200 || !strings.Contains(b, `"commands"`) {
 		t.Errorf("schemas: %d %s", code, b)
+	}
+
+	// 4f. Nothing that holds a secret is readable in the database: not the profile (its Wi-Fi settings), not the declaration's settings, not the queued commands.
+	for _, coll := range []string{"bp_blueprints", "bp_revisions", "ddm_declarations", "ddm_profiles", "commands", "enrollment_queue", "devices"} {
+		cur, err := db.Collection(coll).Find(ctx, bson.D{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var docs []bson.M
+		if err := cur.All(ctx, &docs); err != nil {
+			t.Fatal(err)
+		}
+		if len(docs) == 0 {
+			t.Errorf("%s is empty: the check proves nothing", coll)
+		}
+		for _, d := range docs {
+			b, _ := json.Marshal(d)
+			for _, secret := range []string{"SSID_STR", "MinimumLength", "RequirePasscode", "com.apple.wifi.managed"} {
+				if bytes.Contains(b, []byte(secret)) {
+					t.Errorf("%s holds %q in the clear: %.120s", coll, secret, b)
+				}
+			}
+		}
 	}
 
 	// 5. The management API wants its key; the CA certificate is public.

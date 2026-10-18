@@ -33,8 +33,12 @@ func (s *MongoDBStorage) RetrieveMigrationCheckins(ctx context.Context, c chan<-
 		if err := devices.Decode(&d); err != nil {
 			return err
 		}
+		tok, err := s.open("mdm.token_update", d.Token)
+		if err != nil {
+			return err
+		}
 		send(d.Auth)
-		send(d.Token)
+		send(string(tok))
 	}
 	if err := devices.Err(); err != nil {
 		return err
@@ -51,7 +55,11 @@ func (s *MongoDBStorage) RetrieveMigrationCheckins(ctx context.Context, c chan<-
 		if err := users.Decode(&u); err != nil {
 			return err
 		}
-		send(u.Token)
+		tok, err := s.open("mdm.token_update", u.Token)
+		if err != nil {
+			return err
+		}
+		send(string(tok))
 	}
 	return users.Err()
 }

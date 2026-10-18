@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/micromdm/nanodep/client"
@@ -15,6 +16,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"github.com/micromdm/nanomdm/fleetcore/pki"
+	"github.com/micromdm/nanomdm/fleetcore/seal"
 )
 
 const collection = "dep_names"
@@ -25,6 +27,8 @@ type Store struct {
 	c    *mongo.Collection
 	tid  string
 	pass string
+	// Sealer, if set, seals secrets with the tenant's key. Values written before (sealed with the passphrase) still open; the rekey command seals them with the key.
+	Sealer seal.Interface
 }
 
 var _ storage.AllStorage = (*Store)(nil)
@@ -40,7 +44,7 @@ func New(ctx context.Context, db *mongo.Database, tenant, pass string) (*Store, 
 	return s, nil
 }
 
-func (s *Store) id(name string) string {
+func (s *Store) key(name string) string {
 	if s.tid == "" {
 		return name
 	}
@@ -52,7 +56,7 @@ func (s *Store) set(ctx context.Context, name string, fields bson.D) error {
 	if s.tid != "" {
 		set = append(set, bson.E{Key: "t", Value: s.tid})
 	}
-	_, err := s.c.UpdateOne(ctx, bson.D{{Key: "_id", Value: s.id(name)}}, bson.D{{Key: "$set", Value: set}}, options.UpdateOne().SetUpsert(true))
+	_, err := s.c.UpdateOne(ctx, bson.D{{Key: "_id", Value: s.key(name)}}, bson.D{{Key: "$set", Value: set}}, options.UpdateOne().SetUpsert(true))
 	return err
 }
 
@@ -77,14 +81,29 @@ type pair struct {
 
 func (s *Store) get(ctx context.Context, name string) (*doc, error) {
 	var d doc
-	err := s.c.FindOne(ctx, bson.D{{Key: "_id", Value: s.id(name)}}).Decode(&d)
+	err := s.c.FindOne(ctx, bson.D{{Key: "_id", Value: s.key(name)}}).Decode(&d)
 	if errors.Is(err, mongo.ErrNoDocuments) {
 		return nil, nil
 	}
 	return &d, err
 }
 
-func (s *Store) sealed(b string) (string, error) { return pki.Seal([]byte(b), s.pass) }
+func (s *Store) sealed(b string) (string, error) { return s.seal("dep.secret", []byte(b)) }
+
+func (s *Store) seal(purpose string, b []byte) (string, error) {
+	if s.Sealer != nil {
+		return s.Sealer.Seal(purpose, b)
+	}
+	return pki.Seal(b, s.pass)
+}
+
+// open reads a sealed value: ones sealed with the passphrase (before the key was configured) as well as ones sealed with the tenant's key.
+func (s *Store) open(purpose, v string) ([]byte, error) {
+	if s.Sealer != nil && strings.HasPrefix(v, "s1.") {
+		return s.Sealer.Open(purpose, v)
+	}
+	return pki.Open(v, s.pass)
+}
 
 func (s *Store) StoreAuthTokens(ctx context.Context, name string, t *client.OAuth1Tokens) error {
 	var enc [4]string
@@ -112,7 +131,7 @@ func (s *Store) RetrieveAuthTokens(ctx context.Context, name string) (*client.OA
 	out := &client.OAuth1Tokens{AccessTokenExpiry: d.Tokens.Expiry}
 	for i, dst := range []*string{&out.ConsumerKey, &out.ConsumerSecret, &out.AccessToken, &out.AccessSecret} {
 		v := []string{d.Tokens.ConsumerKey, d.Tokens.ConsumerSecret, d.Tokens.AccessToken, d.Tokens.AccessSecret}[i]
-		b, err := pki.Open(v, s.pass)
+		b, err := s.open("dep.secret", v)
 		if err != nil {
 			return nil, err
 		}
@@ -164,7 +183,7 @@ func (s *Store) RetrieveCursor(ctx context.Context, name string) (string, error)
 }
 
 func (s *Store) StoreTokenPKI(ctx context.Context, name string, pemCert, pemKey []byte) error {
-	k, err := pki.Seal(pemKey, s.pass)
+	k, err := s.seal("dep.pki.key", pemKey)
 	if err != nil {
 		return err
 	}
@@ -175,7 +194,7 @@ func (s *Store) openPair(p *pair) ([]byte, []byte, error) {
 	if p == nil {
 		return nil, nil, storage.ErrNotFound
 	}
-	k, err := pki.Open(p.Key, s.pass)
+	k, err := s.open("dep.pki.key", p.Key)
 	return []byte(p.Cert), k, err
 }
 
@@ -227,10 +246,7 @@ func (s *Store) QueryDEPNames(ctx context.Context, req *storage.DEPNamesQueryReq
 	} else {
 		limit = 100
 	}
-	f := bson.D{{Key: "pki_staging", Value: bson.D{{Key: "$exists", Value: true}}}}
-	if s.tid != "" {
-		f = append(f, bson.E{Key: "t", Value: s.tid})
-	}
+	f := s.scopeF(bson.D{{Key: "pki_staging", Value: bson.D{{Key: "$exists", Value: true}}}})
 	if req != nil && req.Filter != nil && len(req.Filter.DEPNames) > 0 {
 		f = append(f, bson.E{Key: "name", Value: bson.D{{Key: "$in", Value: req.Filter.DEPNames}}})
 	}
@@ -250,4 +266,88 @@ func (s *Store) QueryDEPNames(ctx context.Context, req *storage.DEPNamesQueryReq
 	}
 	sort.Strings(names)
 	return &storage.DEPNamesQueryResult{DEPNames: names}, nil
+}
+
+// Rewrap seals every secret (OAuth tokens, token exchange keys) with the tenant's current key, including those sealed with the passphrase before. It returns how many documents it changed.
+func (s *Store) Rewrap(ctx context.Context) (int, error) {
+	if s.Sealer == nil {
+		return 0, errors.New("no sealer configured")
+	}
+	cur, err := s.c.Find(ctx, s.scopeF(bson.D{}))
+	if err != nil {
+		return 0, err
+	}
+	var rows []bson.M
+	if err := cur.All(ctx, &rows); err != nil {
+		return 0, err
+	}
+	n := 0
+	var re func(purpose string, v any) (any, bool, error)
+	re = func(purpose string, v any) (any, bool, error) {
+		str, ok := v.(string)
+		if !ok || str == "" {
+			return v, false, nil
+		}
+		if strings.HasPrefix(str, "s1.") {
+			out, changed, err := seal.Reseal(s.Sealer, purpose, str)
+			return out, changed, err
+		}
+		plain, err := s.open(purpose, str)
+		if err != nil {
+			return v, false, err
+		}
+		out, err := s.Sealer.Seal(purpose, plain)
+		return out, true, err
+	}
+	for _, r := range rows {
+		set := bson.D{}
+		if t, ok := asM(r["tokens"]); ok {
+			for _, k := range []string{"consumerkey", "consumersecret", "accesstoken", "accesssecret"} {
+				if out, changed, err := re("dep.secret", t[k]); err != nil {
+					return n, err
+				} else if changed {
+					set = append(set, bson.E{Key: "tokens." + k, Value: out})
+				}
+			}
+		}
+		for _, g := range []string{"pki_staging", "pki"} {
+			if t, ok := asM(r[g]); ok {
+				if out, changed, err := re("dep.pki.key", t["key"]); err != nil {
+					return n, err
+				} else if changed {
+					set = append(set, bson.E{Key: g + ".key", Value: out})
+				}
+			}
+		}
+		if len(set) > 0 {
+			// tenant-ok: _id comes from the scoped read above
+			if _, err := s.c.UpdateOne(ctx, bson.D{{Key: "_id", Value: r["_id"]}}, bson.D{{Key: "$set", Value: set}}); err != nil {
+				return n, err
+			}
+			n++
+		}
+	}
+	return n, nil
+}
+
+func (s *Store) scopeF(f bson.D) bson.D {
+	if s.tid == "" {
+		return f
+	}
+	return append(bson.D{{Key: "t", Value: s.tid}}, f...)
+}
+
+// asM reads an embedded document, which the driver returns as an ordered document.
+func asM(v any) (bson.M, bool) {
+	switch t := v.(type) {
+	case bson.M:
+		return t, true
+	case bson.D:
+		m := make(bson.M, len(t))
+		for _, e := range t {
+			m[e.Key] = e.Value
+		}
+		return m, true
+	}
+	return nil, false
 }

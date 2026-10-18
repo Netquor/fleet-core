@@ -2,10 +2,13 @@ package blueprints
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"sort"
 	"time"
 
+	"github.com/micromdm/nanomdm/fleetcore/seal"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
@@ -27,6 +30,8 @@ var ErrNotFound = errors.New("not found")
 type Store struct {
 	db  *mongo.Database
 	tid string
+	// Sealer, if set, encrypts blueprint items (profiles, declarations, asset data, command parameters: they hold Wi-Fi passwords, account credentials, certificates).
+	Sealer seal.Interface
 	// Now is the clock (tests set it).
 	Now func() time.Time
 }
@@ -281,9 +286,17 @@ func (s *Store) ListBlueprints(ctx context.Context, onlyEnabled bool) ([]Bluepri
 	if err != nil {
 		return nil, err
 	}
-	var out []Blueprint
-	if err := cur.All(ctx, &out); err != nil {
+	var rows []storedBlueprint
+	if err := cur.All(ctx, &rows); err != nil {
 		return nil, err
+	}
+	out := make([]Blueprint, 0, len(rows))
+	for _, r := range rows {
+		b, err := s.open(r)
+		if err != nil {
+			return nil, fmt.Errorf("blueprint %s: %w", r.ID, err)
+		}
+		out = append(out, b)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Priority != out[j].Priority {
@@ -295,11 +308,15 @@ func (s *Store) ListBlueprints(ctx context.Context, onlyEnabled bool) ([]Bluepri
 }
 
 func (s *Store) GetBlueprint(ctx context.Context, id string) (*Blueprint, error) {
-	var b Blueprint
-	err := s.db.Collection(cBlueprints).FindOne(ctx, bson.D{{Key: "_id", Value: s.key(id)}}).Decode(&b)
+	var d storedBlueprint
+	err := s.db.Collection(cBlueprints).FindOne(ctx, bson.D{{Key: "_id", Value: s.key(id)}}).Decode(&d)
 	if errors.Is(err, mongo.ErrNoDocuments) {
 		return nil, ErrNotFound
 	}
+	if err != nil {
+		return nil, err
+	}
+	b, err := s.open(d)
 	return &b, err
 }
 
@@ -320,15 +337,23 @@ func (s *Store) SaveBlueprint(ctx context.Context, b Blueprint, by string, env E
 			b.RolloutAt = old.RolloutAt
 		}
 	}
-	if _, err := s.db.Collection(cBlueprints).ReplaceOne(ctx, bson.D{{Key: "_id", Value: s.key(b.ID)}}, s.stampDoc(b), options.Replace().SetUpsert(true)); err != nil {
+	doc, err := s.blueprintDoc(b)
+	if err != nil {
 		return nil, err
 	}
-	rev := s.stampDoc(struct {
-		Blueprint string    `bson:"blueprint"`
-		Revision  int       `bson:"revision"`
-		At        time.Time `bson:"at"`
-		Doc       Blueprint `bson:"doc"`
-	}{b.ID, b.Revision, now, b})
+	if _, err := s.db.Collection(cBlueprints).ReplaceOne(ctx, bson.D{{Key: "_id", Value: s.key(b.ID)}}, doc, options.Replace().SetUpsert(true)); err != nil {
+		return nil, err
+	}
+	rev := s.stamp(bson.D{{Key: "blueprint", Value: b.ID}, {Key: "revision", Value: b.Revision}, {Key: "at", Value: now}})
+	if s.Sealer != nil {
+		enc, err := s.sealRevision(b)
+		if err != nil {
+			return nil, err
+		}
+		rev = append(rev, bson.E{Key: "doc_enc", Value: enc})
+	} else {
+		rev = append(rev, bson.E{Key: "doc", Value: s.stampDoc(b)})
+	}
 	if _, err := s.db.Collection(cRevisions).InsertOne(ctx, rev); err != nil {
 		return nil, err
 	}
@@ -404,6 +429,7 @@ func (s *Store) Revisions(ctx context.Context, id string, limit int) ([]Blueprin
 	}
 	var rows []struct {
 		Doc Blueprint `bson:"doc"`
+		Enc string    `bson:"doc_enc"`
 	}
 	if err := cur.All(ctx, &rows); err != nil {
 		return nil, err
@@ -411,6 +437,15 @@ func (s *Store) Revisions(ctx context.Context, id string, limit int) ([]Blueprin
 	out := make([]Blueprint, len(rows))
 	for i, r := range rows {
 		out[i] = r.Doc
+		if r.Enc != "" {
+			raw, err := seal.Get(s.Sealer, "blueprint.revision", r.Enc)
+			if err != nil {
+				return nil, err
+			}
+			if err := json.Unmarshal(raw, &out[i]); err != nil {
+				return nil, err
+			}
+		}
 	}
 	return out, nil
 }
@@ -527,4 +562,125 @@ func (s *Store) ParentOf(ctx context.Context, enrollment string) (string, error)
 		return "", nil
 	}
 	return d.ID, err
+}
+
+// blueprintDoc is the stored form of a blueprint: with a sealer, the items are one sealed value and not readable in the database.
+func (s *Store) blueprintDoc(b Blueprint) (bson.D, error) {
+	if s.Sealer == nil {
+		return s.stampDoc(b), nil
+	}
+	items, err := json.Marshal(b.Items)
+	if err != nil {
+		return nil, err
+	}
+	enc, err := s.Sealer.Seal("blueprint.items", items)
+	if err != nil {
+		return nil, err
+	}
+	b.Items = nil
+	doc := s.stampDoc(b)
+	out := make(bson.D, 0, len(doc)+1)
+	for _, e := range doc {
+		if e.Key != "items" {
+			out = append(out, e)
+		}
+	}
+	return append(out, bson.E{Key: "items_enc", Value: enc}), nil
+}
+
+// storedBlueprint reads a blueprint document, opening the sealed items.
+type storedBlueprint struct {
+	Blueprint `bson:",inline"`
+	ItemsEnc  string `bson:"items_enc"`
+}
+
+func (s *Store) open(d storedBlueprint) (Blueprint, error) {
+	if d.ItemsEnc == "" {
+		return d.Blueprint, nil
+	}
+	b, err := seal.Get(s.Sealer, "blueprint.items", d.ItemsEnc)
+	if err != nil {
+		return d.Blueprint, err
+	}
+	return d.Blueprint, json.Unmarshal(b, &d.Blueprint.Items)
+}
+
+// RewrapBlueprints seals every blueprint and revision with the current key (and seals those written before sealing was on). It returns how many documents it changed.
+func (s *Store) RewrapBlueprints(ctx context.Context) (int, error) {
+	if s.Sealer == nil {
+		return 0, errors.New("no sealer configured")
+	}
+	n := 0
+	cur, err := s.db.Collection(cBlueprints).Find(ctx, s.scope(bson.D{}))
+	if err != nil {
+		return n, err
+	}
+	var rows []storedBlueprint
+	if err := cur.All(ctx, &rows); err != nil {
+		return n, err
+	}
+	for _, r := range rows {
+		b, err := s.open(r)
+		if err != nil {
+			return n, fmt.Errorf("blueprint %s: %w", r.ID, err)
+		}
+		doc, err := s.blueprintDoc(b)
+		if err != nil {
+			return n, err
+		}
+		if _, err := s.db.Collection(cBlueprints).ReplaceOne(ctx, bson.D{{Key: "_id", Value: s.key(r.ID)}}, doc); err != nil {
+			return n, err
+		}
+		n++
+	}
+	rcur, err := s.db.Collection(cRevisions).Find(ctx, s.scope(bson.D{}))
+	if err != nil {
+		return n, err
+	}
+	var revs []struct {
+		ID  any    `bson:"_id"`
+		Doc bson.M `bson:"doc"`
+		Enc string `bson:"doc_enc"`
+	}
+	if err := rcur.All(ctx, &revs); err != nil {
+		return n, err
+	}
+	for _, r := range revs {
+		var b Blueprint
+		switch {
+		case r.Enc != "":
+			raw, err := seal.Get(s.Sealer, "blueprint.revision", r.Enc)
+			if err != nil {
+				return n, err
+			}
+			if err := json.Unmarshal(raw, &b); err != nil {
+				return n, err
+			}
+		case r.Doc != nil:
+			raw, _ := bson.Marshal(r.Doc)
+			if err := bson.Unmarshal(raw, &b); err != nil {
+				return n, err
+			}
+		default:
+			continue
+		}
+		enc, err := s.sealRevision(b)
+		if err != nil {
+			return n, err
+		}
+		// tenant-ok: _id comes from the scoped read above
+		if _, err := s.db.Collection(cRevisions).UpdateOne(ctx, bson.D{{Key: "_id", Value: r.ID}}, bson.D{{Key: "$set", Value: bson.D{{Key: "doc_enc", Value: enc}}}, {Key: "$unset", Value: bson.D{{Key: "doc", Value: ""}}}}); err != nil {
+			return n, err
+		}
+		n++
+	}
+	return n, nil
+}
+
+func (s *Store) sealRevision(b Blueprint) (string, error) {
+	raw, err := json.Marshal(b)
+	if err != nil {
+		return "", err
+	}
+	return seal.Put(s.Sealer, "blueprint.revision", raw)
 }

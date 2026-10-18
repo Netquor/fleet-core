@@ -53,3 +53,9 @@ test:
 	go test -v -cover -race ./...
 
 .PHONY: my $(NANOMDM) $(NANO2NANO) clean release test
+
+# fleetcore: one binary, a whole Apple MDM (see docs/fleetcore.md)
+fleetcore-%: cmd/fleetcore
+	GOOS=$(word 1,$(subst -, ,$*)) GOARCH=$(word 2,$(subst -, ,$*)) go build $(LDFLAGS) -o $@ ./$<
+
+fleetcore: fleetcore-$(OSARCH)

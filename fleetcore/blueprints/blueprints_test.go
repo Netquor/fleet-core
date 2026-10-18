@@ -14,6 +14,7 @@ import (
 	"github.com/micromdm/nanomdm/fleetcore/applicability"
 	"github.com/micromdm/nanomdm/fleetcore/ddm"
 	"github.com/micromdm/nanomdm/fleetcore/osreleases"
+	"github.com/micromdm/nanomdm/fleetcore/tenantlint"
 	"github.com/micromdm/nanomdm/mdm"
 	"github.com/micromdm/plist"
 	"go.mongodb.org/mongo-driver/v2/mongo"
@@ -26,6 +27,8 @@ func testLogger() log.Logger {
 	}
 	return log.NopLogger
 }
+
+const testTenant = "acme"
 
 type sent struct {
 	ids  []string
@@ -108,21 +111,31 @@ func newFixture(t *testing.T) *fixture {
 		t.Skip("NANOMDM_MONGODB_STORAGE_TEST_URI not set")
 	}
 	ctx := context.Background()
-	mc, err := mongo.Connect(options.Client().ApplyURI(uri))
+	// The tests run as one tenant of a shared database, with the tenant check watching every command that reaches MongoDB.
+	mon := tenantlint.NewMonitor(testTenant, "os_releases", "schema_sets")
+	mc, err := mongo.Connect(options.Client().ApplyURI(uri).SetMonitor(mon.CommandMonitor()))
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { mc.Disconnect(context.Background()) })
+	t.Cleanup(func() {
+		if v := mon.Violations(); len(v) > 0 {
+			t.Errorf("commands that were not scoped to the tenant:\n%s", strings.Join(v, "\n"))
+		}
+		if mon.Checked() == 0 {
+			t.Error("the tenant check saw no commands: it proves nothing")
+		}
+		mc.Disconnect(context.Background())
+	})
 	db := mc.Database("fleetcore_bp_test")
 	if err := db.Drop(ctx); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Drop(context.Background()) })
-	st, err := NewStore(ctx, db, "")
+	st, err := NewStore(ctx, db, testTenant)
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg, err := applicability.NewRegistry(ctx, db, "")
+	reg, err := applicability.NewRegistry(ctx, db, testTenant)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +144,7 @@ func newFixture(t *testing.T) *fixture {
 	f.eng.Now = func() time.Time { return f.now }
 	st.Now = func() time.Time { return f.now }
 	f.obs = &Observer{Store: st, Now: func() time.Time { return f.now }}
-	f.ddm, err = ddm.NewStore(ctx, db, "")
+	f.ddm, err = ddm.NewStore(ctx, db, testTenant)
 	if err != nil {
 		t.Fatal(err)
 	}

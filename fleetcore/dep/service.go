@@ -227,10 +227,7 @@ func (s *Service) record(ctx context.Context, name string, resp *godep.FetchDevi
 		if serial == "" {
 			continue
 		}
-		id := name + "\x1f" + serial
-		if s.tid != "" {
-			id = s.tid + "\x1f" + id
-		}
+		id := s.key(name, serial)
 		if d.OpType != nil && *d.OpType == godep.DeviceJsonOpTypeDeleted {
 			ops = append(ops, mongo.NewDeleteOneModel().SetFilter(bson.D{{Key: "_id", Value: id}}))
 			continue
@@ -252,10 +249,7 @@ func (s *Service) record(ctx context.Context, name string, resp *godep.FetchDevi
 func (s *Service) devicesHandler(prefix string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		name := r.URL.Path[len(prefix):]
-		f := bson.D{{Key: "dep", Value: name}}
-		if s.tid != "" {
-			f = append(f, bson.E{Key: "t", Value: s.tid})
-		}
+		f := s.scope(bson.D{{Key: "dep", Value: name}})
 		cur, err := s.db.Collection(devicesCollection).Find(r.Context(), f, options.Find().SetLimit(1000).SetSort(bson.D{{Key: "serial", Value: 1}}))
 		if err != nil {
 			http.Error(w, err.Error(), 500)
@@ -276,4 +270,21 @@ func (s *Service) devicesHandler(prefix string) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{"devices": out})
 	}
+}
+
+// key is the _id of a document keyed by the parts, with the tenant in front when tenants share the collection.
+func (s *Service) key(parts ...string) string {
+	k := strings.Join(parts, "\x1f")
+	if s.tid == "" {
+		return k
+	}
+	return s.tid + "\x1f" + k
+}
+
+// scope puts the tenant in front of a filter, when tenants share the collection.
+func (s *Service) scope(f bson.D) bson.D {
+	if s.tid == "" {
+		return f
+	}
+	return append(bson.D{{Key: "t", Value: s.tid}}, f...)
 }

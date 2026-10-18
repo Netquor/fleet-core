@@ -29,10 +29,14 @@ func (s *MongoDBStorage) EnqueueCommand(ctx context.Context, ids []string, cmd *
 		return nil, errors.New("no id(s) supplied to queue command to")
 	}
 	t := now()
+	rawCmd, err := s.seal("mdm.command", cmd.Raw)
+	if err != nil {
+		return nil, err
+	}
 	return nil, s.inTx(ctx, func(ctx context.Context) error {
 		if _, err := s.db.Collection(cCommands).InsertOne(ctx, s.stamp(bson.D{
 			{Key: "_id", Value: s.pk(cmd.CommandUUID)}, {Key: "command_uuid", Value: cmd.CommandUUID},
-			{Key: "request_type", Value: cmd.Command.RequestType}, {Key: "command", Value: string(cmd.Raw)}, {Key: "command_doc", Value: plistDoc(cmd.Raw)},
+			{Key: "request_type", Value: cmd.Command.RequestType}, {Key: "command", Value: rawCmd}, {Key: "command_doc", Value: s.doc(cmd.Raw)},
 			{Key: "created_at", Value: t}, {Key: "updated_at", Value: t},
 		})); err != nil {
 			return err
@@ -82,12 +86,16 @@ func (s *MongoDBStorage) StoreCommandReport(r *mdm.Request, result *mdm.CommandR
 		notNowAt = bson.D{{Key: "$ifNull", Value: bson.A{"$not_now_at", "$$NOW"}}}
 		newTally = bson.D{{Key: "$add", Value: bson.A{tally, 1}}}
 	}
+	rawResult, err := s.seal("mdm.result", result.Raw)
+	if err != nil {
+		return err
+	}
 	res, err := s.db.Collection(cQueue).UpdateOne(r.Context(),
 		s.scope(bson.D{{Key: "id", Value: r.ID}, {Key: "command_uuid", Value: result.CommandUUID}}),
 		mongo.Pipeline{{{Key: "$set", Value: bson.D{
 			{Key: "status", Value: lit(result.Status)},
-			{Key: "result", Value: lit(string(result.Raw))},
-			{Key: "result_doc", Value: lit(plistDoc(result.Raw))},
+			{Key: "result", Value: lit(rawResult)},
+			{Key: "result_doc", Value: lit(s.doc(result.Raw))},
 			{Key: "not_now_at", Value: notNowAt},
 			{Key: "not_now_tally", Value: newTally},
 			{Key: "result_at", Value: "$$NOW"},
@@ -131,8 +139,12 @@ func (s *MongoDBStorage) RetrieveNextCommand(r *mdm.Request, skipNotNow bool) (*
 	if err != nil {
 		return nil, err
 	}
+	raw, err := s.open("mdm.command", c.Command)
+	if err != nil {
+		return nil, err
+	}
 	command := new(mdm.Command)
-	command.CommandUUID, command.Command.RequestType, command.Raw = q.UUID, c.Type, []byte(c.Command)
+	command.CommandUUID, command.Command.RequestType, command.Raw = q.UUID, c.Type, raw
 	return command, nil
 }
 

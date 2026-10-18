@@ -153,6 +153,6 @@ In the current schema, the MDM software-update commands (`ScheduleOSUpdate`, `Av
 3. **Declarative device management**: declarations as blueprint items, with software update enforcement; status-driven drift detection.
 4. **JSON command API**: `POST /v1/commands` takes JSON, validates against the Apple device-management schemas (port `schemas.ts` as generated Go types), turns it into a plist command and enqueues it.
 5. **Device and enrollment REST APIs**: list/filter devices, enrollments, queue and results over the native BSON documents, with cursors.
-6. **Hardening**: per-tenant encryption of push key, unlock and bootstrap tokens, and identity keys; per-cell database users; a relay from one cluster-level change stream (or outbox) to NATS for events.
+6. **Hardening** (built, see [fleetcore.md](fleetcore.md)): per-tenant sealing of secrets with keys a tenant's server holds alone, certificate (x509) login to MongoDB with one database per identity, mutual-TLS management API, source check for tenant scoping. Still to do: a relay from one cluster-level change stream (or outbox) to NATS for events.
 
 Order: VPP and apps, user enrollment, device APIs, hardening, blueprints, VPP, device APIs, hardening. ADE and the command API are what make a first real fleet usable.

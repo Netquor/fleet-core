@@ -1,0 +1,41 @@
+# fleetcore against a MongoDB that requires TLS and client certificates: the server logs in with its own certificate (MONGODB-X509, no password), restricted to its own database.
+#
+#   1. deploy/fleetcore/make-certs.sh deploy/fleetcore/certs
+#   2. docker compose -f deploy/fleetcore/compose.secure.yaml up -d mongo
+#   3. create the tenant's database identity (once; it needs the administrator's certificate):
+#        docker compose -f deploy/fleetcore/compose.secure.yaml run --rm --entrypoint /app/fleetcore fleetcore mongo-user \
+#          -uri 'mongodb://mongo:27017/?replicaSet=rs0&authSource=$external' -cert /certs/admin.pem -ca /certs/ca.pem \
+#          -subject 'CN=acme-mdm-1,O=tenants' -db fleetcore_acme
+#   4. docker compose -f deploy/fleetcore/compose.secure.yaml up -d fleetcore
+#
+# The first start of the cluster needs a root user and the replica set; see docs/fleetcore.md ("A secure cluster").
+services:
+  mongo:
+    image: mongo:7
+    command: ["--replSet", "rs0", "--bind_ip_all", "--keyFile", "/certs/keyfile", "--tlsMode", "requireTLS", "--tlsCertificateKeyFile", "/certs/mongo.pem", "--tlsCAFile", "/certs/ca.pem", "--tlsClusterCAFile", "/certs/ca.pem"]
+    volumes: ["mongo-data:/data/db", "./certs:/certs:ro"]
+
+  fleetcore:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.fleetcore
+    depends_on: [mongo]
+    ports: ["9000:9000"]
+    volumes: ["./certs:/certs:ro"]
+    environment:
+      FLEETCORE_URL: ${FLEETCORE_URL:?set the public https name devices will use}
+      FLEETCORE_MONGO_URI: mongodb://mongo:27017/?replicaSet=rs0
+      FLEETCORE_MONGO_CERT: /certs/tenant-acme.pem
+      FLEETCORE_MONGO_CA: /certs/ca.pem
+      FLEETCORE_DB: fleetcore_acme
+      FLEETCORE_ORG: ${FLEETCORE_ORG:-My Organization}
+      FLEETCORE_TOPIC: ${FLEETCORE_TOPIC:-}
+      FLEETCORE_CERT_SOURCE: signature
+      FLEETCORE_API_KEY: ${FLEETCORE_API_KEY:?set a long random API key}
+      # This server holds its tenant's key only (from: fleetcore tenant-key -tenant acme), never the master key.
+      FLEETCORE_TENANT_KEYS: ${FLEETCORE_TENANT_KEYS:?run: fleetcore tenant-key -tenant acme}
+      FLEETCORE_TENANT: acme
+      FLEETCORE_LISTEN: ":9000"
+
+volumes:
+  mongo-data:

@@ -13,6 +13,7 @@ import (
 )
 
 func (s *MongoDBStorage) exists(ctx context.Context, filter bson.D) (bool, error) {
+	// tenant-ok: every caller passes a filter built with s.scope
 	n, err := s.db.Collection(cCertAuth).CountDocuments(ctx, filter, options.Count().SetLimit(1))
 	return n > 0, err
 }

@@ -13,8 +13,16 @@ import (
 // StoreBootstrapToken stores the device's bootstrap token.
 func (s *MongoDBStorage) StoreBootstrapToken(r *mdm.Request, msg *mdm.SetBootstrapToken) error {
 	t := now()
+	var token any = nullEmpty(msg.BootstrapToken.BootstrapToken.String())
+	if tok := msg.BootstrapToken.BootstrapToken.String(); tok != "" && s.sealer != nil {
+		enc, err := s.seal("mdm.bootstrap", []byte(tok))
+		if err != nil {
+			return err
+		}
+		token = enc
+	}
 	_, err := s.db.Collection(cDevices).UpdateOne(r.Context(), bson.D{{Key: "_id", Value: s.pk(r.ID)}},
-		bson.D{{Key: "$set", Value: bson.D{{Key: "bootstrap_token_b64", Value: nullEmpty(msg.BootstrapToken.BootstrapToken.String())}, {Key: "bootstrap_token_at", Value: t}, {Key: "updated_at", Value: t}}}})
+		bson.D{{Key: "$set", Value: bson.D{{Key: "bootstrap_token_b64", Value: token}, {Key: "bootstrap_token_at", Value: t}, {Key: "updated_at", Value: t}}}})
 	if err != nil {
 		return err
 	}
@@ -34,7 +42,11 @@ func (s *MongoDBStorage) RetrieveBootstrapToken(r *mdm.Request, _ *mdm.GetBootst
 		return nil, err
 	}
 	bs := new(mdm.BootstrapToken)
-	if err = bs.SetTokenString(*d.Token); err == nil {
+	tok, err := s.open("mdm.bootstrap", *d.Token)
+	if err != nil {
+		return nil, err
+	}
+	if err = bs.SetTokenString(string(tok)); err == nil {
 		err = s.updateLastSeen(r)
 	}
 	return bs, err

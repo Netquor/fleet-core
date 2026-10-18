@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"flag"
 	"fmt"
@@ -15,6 +16,8 @@ import (
 	"time"
 
 	"github.com/micromdm/nanolib/log/stdlogfmt"
+	"github.com/micromdm/nanomdm/fleetcore/provision"
+	"github.com/micromdm/nanomdm/fleetcore/seal"
 	"github.com/micromdm/nanomdm/fleetcore/server"
 	"github.com/micromdm/nanomdm/storage/mongodb"
 	"go.mongodb.org/mongo-driver/v2/mongo"
@@ -32,25 +35,35 @@ func env(name, def string) string {
 }
 
 func main() {
+	if adminCommand(os.Args[1:]) {
+		return
+	}
 	var (
-		listen  = flag.String("listen", env("FLEETCORE_LISTEN", ":9000"), "address to listen on")
-		base    = flag.String("url", env("FLEETCORE_URL", ""), "public base URL devices use, for example https://mdm.example.com")
-		org     = flag.String("org", env("FLEETCORE_ORG", "Fleet"), "organization name for the CA and the profile")
-		topic   = flag.String("topic", env("FLEETCORE_TOPIC", ""), "APNs topic of the push certificate (com.apple.mgmt.External.<uuid>)")
-		uri     = flag.String("mongo", env("FLEETCORE_MONGO_URI", "mongodb://127.0.0.1:27017/?replicaSet=rs0"), "MongoDB URI")
-		dbName  = flag.String("db", env("FLEETCORE_DB", "fleetcore"), "database name")
-		tenant  = flag.String("tenant", env("FLEETCORE_TENANT", ""), "tenant id (shared-collections mode); empty: the database belongs to one tenant")
-		caPass  = flag.String("ca-pass", env("FLEETCORE_CA_PASS", ""), "passphrase that encrypts the CA key at rest")
-		apiKey  = flag.String("api-key", env("FLEETCORE_API_KEY", ""), "management API key (HTTP basic auth, user fleetcore); empty disables the API")
-		source  = flag.String("cert-source", env("FLEETCORE_CERT_SOURCE", "tls"), "where the device certificate comes from: tls, signature or header")
-		header  = flag.String("cert-header", env("FLEETCORE_CERT_HEADER", ""), "header carrying the certificate when cert-source=header")
-		tlsCert = flag.String("tls-cert", env("FLEETCORE_TLS_CERT", ""), "TLS certificate file")
-		tlsKey  = flag.String("tls-key", env("FLEETCORE_TLS_KEY", ""), "TLS key file")
-		acme    = flag.String("autocert", env("FLEETCORE_AUTOCERT", ""), "host name to get a Let's Encrypt certificate for (serves :443 and :80)")
-		acmeDir = flag.String("autocert-dir", env("FLEETCORE_AUTOCERT_DIR", "autocert-cache"), "directory that keeps autocert certificates")
-		noFeeds = flag.Bool("no-feeds", os.Getenv("FLEETCORE_NO_FEEDS") != "", "do not contact Apple's feeds (device-management schemas on GitHub, OS releases); use the built-in snapshot")
-		debug   = flag.Bool("debug", false, "log more")
-		showVer = flag.Bool("version", false, "print the version and exit")
+		listen     = flag.String("listen", env("FLEETCORE_LISTEN", ":9000"), "address to listen on")
+		base       = flag.String("url", env("FLEETCORE_URL", ""), "public base URL devices use, for example https://mdm.example.com")
+		org        = flag.String("org", env("FLEETCORE_ORG", "MDM"), "organization name for the CA and the profile")
+		topic      = flag.String("topic", env("FLEETCORE_TOPIC", ""), "APNs topic of the push certificate (com.apple.mgmt.External.<uuid>)")
+		uri        = flag.String("mongo", env("FLEETCORE_MONGO_URI", "mongodb://127.0.0.1:27017/?replicaSet=rs0"), "MongoDB URI")
+		mongoCert  = flag.String("mongo-cert", env("FLEETCORE_MONGO_CERT", ""), "client certificate and key (PEM) this server authenticates to MongoDB with (MONGODB-X509, no password)")
+		adminCA    = flag.String("admin-ca", env("FLEETCORE_ADMIN_CA", ""), "CA certificate (PEM) whose client certificates may use the management API (mutual TLS); needs TLS terminated by this server")
+		mongoCA    = flag.String("mongo-ca", env("FLEETCORE_MONGO_CA", ""), "CA certificate that signed the MongoDB servers' certificates")
+		dbName     = flag.String("db", env("FLEETCORE_DB", "fleetcore"), "database name")
+		tenant     = flag.String("tenant", env("FLEETCORE_TENANT", ""), "tenant id (shared-collections mode); empty: the database belongs to one tenant")
+		caPass     = flag.String("ca-pass", env("FLEETCORE_CA_PASS", ""), "passphrase that encrypts the CA key at rest")
+		apiKey     = flag.String("api-key", env("FLEETCORE_API_KEY", ""), "management API key (HTTP basic auth, user fleetcore); empty disables the API")
+		source     = flag.String("cert-source", env("FLEETCORE_CERT_SOURCE", "tls"), "where the device certificate comes from: tls, signature or header")
+		header     = flag.String("cert-header", env("FLEETCORE_CERT_HEADER", ""), "header carrying the certificate when cert-source=header")
+		tlsCert    = flag.String("tls-cert", env("FLEETCORE_TLS_CERT", ""), "TLS certificate file")
+		tlsKey     = flag.String("tls-key", env("FLEETCORE_TLS_KEY", ""), "TLS key file")
+		acme       = flag.String("autocert", env("FLEETCORE_AUTOCERT", ""), "host name to get a Let's Encrypt certificate for (serves :443 and :80)")
+		acmeDir    = flag.String("autocert-dir", env("FLEETCORE_AUTOCERT_DIR", "autocert-cache"), "directory that keeps autocert certificates")
+		masterKey  = flag.String("master-key", env("FLEETCORE_MASTER_KEY", ""), "master keys that seal secrets at rest: base64, 32 bytes each, comma separated, the current one first (old ones stay to open older data)")
+		masterFile = flag.String("master-key-file", env("FLEETCORE_MASTER_KEY_FILE", ""), "file holding the master keys (same format); use instead of -master-key")
+		tenantKeys = flag.String("tenant-keys", env("FLEETCORE_TENANT_KEYS", ""), "this tenant's own keys, <id>:<base64>, current first (from 'fleetcore tenant-key'): the server then never holds the master key")
+		rekey      = flag.Bool("rekey", false, "seal every stored secret with the current master key, print what changed and exit")
+		noFeeds    = flag.Bool("no-feeds", os.Getenv("FLEETCORE_NO_FEEDS") != "", "do not contact Apple's feeds (device-management schemas on GitHub, OS releases); use the built-in snapshot")
+		debug      = flag.Bool("debug", false, "log more")
+		showVer    = flag.Bool("version", false, "print the version and exit")
 	)
 	flag.Parse()
 	if *showVer {
@@ -65,12 +78,28 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	mc, err := mongo.Connect(options.Client().ApplyURI(*uri))
+	sealer, err := tenantSealer(*tenantKeys, *masterKey, *masterFile, *caPass, *tenant)
+	if err != nil {
+		fatal(logger, err)
+	}
+	if sealer == nil {
+		logger.Info("msg", "no key: secrets are stored unencrypted. Set FLEETCORE_TENANT_KEYS (or FLEETCORE_MASTER_KEY) outside development")
+	}
+	clientOpts := options.Client().ApplyURI(*uri)
+	if *mongoCert != "" {
+		if clientOpts, err = provision.X509Options(*uri, *mongoCert, *mongoCA); err != nil {
+			fatal(logger, err)
+		}
+	}
+	mc, err := mongo.Connect(clientOpts)
 	if err != nil {
 		fatal(logger, err)
 	}
 	defer mc.Disconnect(context.Background())
 	opts := []mongodb.Option{mongodb.WithClient(mc), mongodb.WithDatabase(*dbName)}
+	if sealer != nil {
+		opts = append(opts, mongodb.WithSealer(sealer))
+	}
 	if *tenant != "" {
 		opts = append(opts, mongodb.WithTenant(*tenant))
 	}
@@ -78,14 +107,38 @@ func main() {
 	if err != nil {
 		fatal(logger, err)
 	}
+	var adminPool *x509.CertPool
+	if *adminCA != "" {
+		if *tlsCert == "" && *acme == "" {
+			fatal(logger, errors.New("-admin-ca needs this server to terminate TLS (-tls-cert and -tls-key, or -autocert): the client certificate is read from the connection"))
+		}
+		pem, err := os.ReadFile(*adminCA)
+		if err != nil {
+			fatal(logger, err)
+		}
+		adminPool = x509.NewCertPool()
+		if !adminPool.AppendCertsFromPEM(pem) {
+			fatal(logger, errors.New("no certificate in the -admin-ca file"))
+		}
+	}
 	srv, err := server.New(ctx, server.Config{
 		BaseURL: *base, Organization: *org, Topic: *topic, Storage: store, PKIDB: mc.Database(*dbName), PKITenant: *tenant,
-		CAPass: *caPass, CertSource: server.CertSource(*source), CertHeader: *header, APIKey: *apiKey, Logger: logger, Debug: *debug, Version: version, NoFeeds: *noFeeds,
+		CAPass: *caPass, CertSource: server.CertSource(*source), CertHeader: *header, APIKey: *apiKey, Logger: logger, Debug: *debug, Version: version, NoFeeds: *noFeeds, Sealer: sealer, AdminCA: adminPool,
 	})
 	if err != nil {
 		fatal(logger, err)
 	}
 
+	if *rekey {
+		res, err := srv.Rekey(ctx)
+		for k, v := range res {
+			fmt.Printf("%-14s %d changed\n", k, v)
+		}
+		if err != nil {
+			fatal(logger, err)
+		}
+		return
+	}
 	go func() {
 		if err := srv.Run(ctx); err != nil {
 			logger.Info("msg", "background work stopped", "err", err)
@@ -131,4 +184,38 @@ func main() {
 func fatal(l interface{ Info(...interface{}) }, err error) {
 	l.Info("msg", "fatal", "err", err)
 	os.Exit(1)
+}
+
+// tenantSealer builds the sealer for this tenant: from the tenant's own keys (preferred: the server never sees the master key), from master keys, or from the CA passphrase when that is all
+// there is. nil means no encryption (development).
+func tenantSealer(tenantKeys, masterKeys, masterFile, passphrase, tenant string) (seal.Interface, error) {
+	if tenantKeys != "" {
+		return seal.ForTenantKeys(tenant, seal.ParseTenantKeys(tenantKeys)...)
+	}
+	if masterFile != "" {
+		b, err := os.ReadFile(masterFile)
+		if err != nil {
+			return nil, err
+		}
+		masterKeys = string(b)
+	}
+	switch {
+	case masterKeys != "":
+		ks, err := seal.ParseKeys(masterKeys)
+		if err != nil {
+			return nil, err
+		}
+		ring, err := seal.NewKeyring(ks...)
+		if err != nil {
+			return nil, err
+		}
+		return ring.For(tenant), nil
+	case passphrase != "":
+		ring, err := seal.FromPassphrase(passphrase)
+		if err != nil {
+			return nil, err
+		}
+		return ring.For(tenant), nil
+	}
+	return nil, nil
 }

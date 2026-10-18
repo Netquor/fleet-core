@@ -1,0 +1,15 @@
+# fleetcore: one binary, a whole Apple MDM. Build from the repository root:
+#   docker build -f Dockerfile.fleetcore -t fleetcore .
+FROM golang:1.25 AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+ARG VERSION=dev
+RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/fleetcore ./cmd/fleetcore
+
+FROM gcr.io/distroless/static:nonroot
+COPY --from=build /out/fleetcore /app/fleetcore
+USER nonroot:nonroot
+EXPOSE 9000
+ENTRYPOINT ["/app/fleetcore"]

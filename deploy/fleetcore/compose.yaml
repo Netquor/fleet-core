@@ -1,0 +1,34 @@
+# fleetcore with a single-node MongoDB replica set, for trying it out. Not for production: no TLS or authentication to MongoDB (see compose.secure.yaml), and TLS for devices is
+# expected from a proxy in front (the server then reads the device's signed requests: FLEETCORE_CERT_SOURCE=signature).
+#
+#   FLEETCORE_URL=https://mdm.example.com docker compose -f deploy/fleetcore/compose.yaml up --build
+services:
+  mongo:
+    image: mongo:7
+    command: ["--replSet", "rs0", "--bind_ip_all"]
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --eval 'try { rs.status().ok } catch (e) { rs.initiate({_id:\"rs0\",members:[{_id:0,host:\"mongo:27017\"}]}).ok }'"]
+      interval: 5s
+      retries: 20
+    volumes: ["mongo-data:/data/db"]
+
+  fleetcore:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.fleetcore
+    depends_on:
+      mongo: { condition: service_healthy }
+    ports: ["9000:9000"]
+    environment:
+      FLEETCORE_URL: ${FLEETCORE_URL:?set the public https name devices will use}
+      FLEETCORE_MONGO_URI: mongodb://mongo:27017/?replicaSet=rs0
+      FLEETCORE_DB: fleetcore
+      FLEETCORE_ORG: ${FLEETCORE_ORG:-My Organization}
+      FLEETCORE_TOPIC: ${FLEETCORE_TOPIC:-}            # com.apple.mgmt.External.<uuid>, from your push certificate
+      FLEETCORE_CERT_SOURCE: signature                 # TLS ends at your proxy
+      FLEETCORE_API_KEY: ${FLEETCORE_API_KEY:?set a long random API key}
+      FLEETCORE_MASTER_KEY: ${FLEETCORE_MASTER_KEY:?run: docker run --rm fleetcore keygen}
+      FLEETCORE_LISTEN: ":9000"
+
+volumes:
+  mongo-data:

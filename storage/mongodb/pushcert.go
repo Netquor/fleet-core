@@ -21,7 +21,11 @@ func (s *MongoDBStorage) RetrievePushCert(ctx context.Context, topic string) ([]
 	if err := s.db.Collection(cPushCerts).FindOne(ctx, bson.D{{Key: "_id", Value: s.pk(topic)}}).Decode(&d); err != nil {
 		return nil, nil, "", err
 	}
-	return []byte(d.Cert), []byte(d.Key), strconv.Itoa(d.Stale), nil
+	key, err := s.open("mdm.pushkey", d.Key)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	return []byte(d.Cert), key, strconv.Itoa(d.Stale), nil
 }
 
 // IsPushCertStale reports whether the push certificate was replaced since staleToken was handed out.
@@ -46,9 +50,13 @@ func (s *MongoDBStorage) StorePushCert(ctx context.Context, pemCert, pemKey []by
 	if err != nil {
 		return err
 	}
+	sealedKey, err := s.seal("mdm.pushkey", pemKey)
+	if err != nil {
+		return err
+	}
 	_, err = s.db.Collection(cPushCerts).UpdateOne(ctx, bson.D{{Key: "_id", Value: s.pk(topic)}},
 		mongo.Pipeline{{{Key: "$set", Value: s.stampSet(bson.D{
-			{Key: "topic", Value: lit(topic)}, {Key: "cert_pem", Value: lit(string(pemCert))}, {Key: "key_pem", Value: lit(string(pemKey))},
+			{Key: "topic", Value: lit(topic)}, {Key: "cert_pem", Value: lit(string(pemCert))}, {Key: "key_pem", Value: lit(sealedKey)},
 			{Key: "stale_token", Value: bson.D{{Key: "$cond", Value: bson.A{bson.D{{Key: "$eq", Value: bson.A{bson.D{{Key: "$type", Value: "$stale_token"}}, "missing"}}}, 0, bson.D{{Key: "$add", Value: bson.A{"$stale_token", 1}}}}}}},
 			{Key: "created_at", Value: bson.D{{Key: "$ifNull", Value: bson.A{"$created_at", "$$NOW"}}}},
 			{Key: "updated_at", Value: "$$NOW"},

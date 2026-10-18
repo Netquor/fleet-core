@@ -51,29 +51,20 @@ A brief overview of the various command-line switches and HTTP endpoints and API
   - Enrollment-certificate authorization
   - API-driven interaction (queuing of commands, APNs pushes, etc.)
 
-## $x not included
+## What upstream NanoMDM leaves out, and where fleetcore has it
 
-This section describes upstream NanoMDM, the library underneath. **fleetcore (above) includes every item listed here.**
+NanoMDM is one component of an MDM. On its own it does not include the pieces below; each is built into fleetcore. If you use NanoMDM as a library without fleetcore, you still bring your own.
 
-NanoMDM is but one component for a functioning MDM server. At a minimum you need a SCEP server and TLS termination, for example. If you've used [MicroMDM](https://github.com/micromdm/micromdm) before you might be interested to know what NanoMDM does *not* include, by way of comparison.
-
-- SCEP.
-  - Spin up your own [scep](https://github.com/micromdm/scep) server. Or bring your own.
-- TLS.
-  - You'll need to provide your own reverse proxy/load balancer that terminates TLS.
-- ADE (DEP) API access.
-  - While ADE/DEP *enrollments* are supported there is no DEP API access.
-- Enrollment (Profiles).
-  - You'll need to create and serve your own enrollment profiles to devices.
-- Blueprints.
-  - No 'automatic' command sending upon enrollment. Entirely driven by webhook or other integrations.
-- JSON command API.
-  - Commands are submitted in raw Plist form only. See the [cmdr.py tool](tools/cmdr.py) that helps generate raw commands
-  - The [micro2nano](https://github.com/micromdm/micro2nano) project provides an API translation server between MicroMDM's JSON command API and NanoMDM's raw Plist API.
-- VPP.
-- Enrollment (device) APIs.
-  - No ability, yet, to inspect enrollment details or state.
-  - This is partly mitigated by the fact that both the `file` and `mysql` storage backends are "easy" to inspect and query.
+| Not in NanoMDM | In fleetcore |
+| --- | --- |
+| SCEP | a CA made on first start, SCEP at `/scep` (`fleetcore/pki`) |
+| TLS | its own listener (certificate or Let's Encrypt), or a proxy in front |
+| Enrollment profiles | `/enroll`, `/enroll/ade`, `/enroll/byod` (`fleetcore/enroll`, `fleetcore/byod`) |
+| ADE (DEP) API access | `fleetcore/dep`: tokens, sync, assigner, profile definition |
+| Blueprints | `fleetcore/blueprints`: scope rules, groups, staged rollouts, drift repair |
+| JSON command API | `/v1/commands`, validated against Apple's schemas |
+| VPP | `fleetcore/vpp`: licensing and `InstallApplication` |
+| Enrollment and device APIs | `/v1/devices`, `/v1/enrollments`, `/v1/queue`, with cursors |
 
 ## Architecture Overview
 

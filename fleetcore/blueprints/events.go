@@ -18,6 +18,12 @@ import (
 type Observer struct {
 	service.NopService
 	Store *Store
+	// BYOD, if set, ties a User Enrollment device to the person who signed in to enroll it.
+	BYOD interface {
+		ManagedAppleID(ctx context.Context, certificateName string) string
+	}
+	// OnResult is called with every command result a device sends (workflows that wait for an answer hang here).
+	OnResult []func(ctx context.Context, device string, res *mdm.CommandResults)
 	// DDM, if set, lets a user channel that checks out have its declarations cleared at once.
 	DDM    *ddm.Store
 	Logger log.Logger
@@ -67,6 +73,14 @@ func (o *Observer) userChannel(r *mdm.Request) (bool, error) {
 	return true, o.Store.AddUser(r.Context(), r.ParentID, r.ID)
 }
 
+// person is the Managed Apple Account a User Enrollment device's identity certificate was issued for.
+func (o *Observer) person(r *mdm.Request) string {
+	if o.BYOD == nil || r.Certificate == nil || !strings.Contains(r.Type.String(), "User Enrollment") {
+		return ""
+	}
+	return o.BYOD.ManagedAppleID(r.Context(), r.Certificate.Subject.CommonName)
+}
+
 func (o *Observer) Authenticate(r *mdm.Request, m *mdm.Authenticate) error {
 	if ok, err := o.userChannel(r); ok {
 		return err
@@ -84,6 +98,7 @@ func (o *Observer) Authenticate(r *mdm.Request, m *mdm.Authenticate) error {
 	}
 	return o.Store.UpsertDevice(r.Context(), DeviceUpdate{
 		ID: r.ID, UDID: m.UDID, Serial: m.SerialNumber, Name: info.DeviceName, Platform: PlatformOf(product), Model: product, OSVersion: info.OSVersion, EnrollType: r.Type.String(),
+		ManagedAppleID: o.person(r),
 	}, o.now())
 }
 
@@ -91,8 +106,12 @@ func (o *Observer) TokenUpdate(r *mdm.Request, m *mdm.TokenUpdate) error {
 	if ok, err := o.userChannel(r); ok {
 		return err
 	}
+	var tu struct {
+		AwaitingConfiguration *bool
+	}
+	_ = plist.Unmarshal(m.Raw, &tu)
 	// A device that enrolled before the observer was running (or whose inventory was lost) is created here, and every token update asks for a look.
-	return o.Store.UpsertDevice(r.Context(), DeviceUpdate{ID: r.ID, UDID: m.UDID, EnrollType: r.Type.String()}, o.now())
+	return o.Store.UpsertDevice(r.Context(), DeviceUpdate{ID: r.ID, UDID: m.UDID, EnrollType: r.Type.String(), ManagedAppleID: o.person(r), Awaiting: tu.AwaitingConfiguration}, o.now())
 }
 
 func (o *Observer) CheckOut(r *mdm.Request, m *mdm.CheckOut) error {
@@ -112,6 +131,9 @@ func (o *Observer) CommandAndReportResults(r *mdm.Request, res *mdm.CommandResul
 		return nil, nil
 	}
 	ctx := r.Context()
+	for _, f := range o.OnResult {
+		f(ctx, r.ID, res)
+	}
 	// DeviceInformation answers refresh the inventory.
 	if res.Status == "Acknowledged" {
 		var back struct {
@@ -137,6 +159,10 @@ func (o *Observer) CommandAndReportResults(r *mdm.Request, res *mdm.CommandResul
 			return nil, o.Store.SetDeviceFields(ctx, a.Device, bson.D{}, true)
 		}
 		a.State, a.Error = StateApplied, ""
+		// A device waiting in Setup Assistant is released as soon as what it waits for is done.
+		if d, err := o.Store.GetDevice(ctx, a.Device); err == nil && d.Awaiting {
+			_ = o.Store.SetDeviceFields(ctx, a.Device, bson.D{}, true)
+		}
 	case "Error", "CommandFormatError":
 		msg := res.Status
 		if len(res.ErrorChain) > 0 {

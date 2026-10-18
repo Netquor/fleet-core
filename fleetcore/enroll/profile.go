@@ -28,6 +28,11 @@ type Options struct {
 	SignMessage bool
 	// RemovalDisallowed stops the person removing the profile on a supervised device.
 	RemovalDisallowed bool
+	// BYOD makes a User Enrollment profile (account-driven enrollment of a personal device): the organization manages only its own data. ManagedAppleID is the person's Managed Apple
+	// Account and SubjectCN the name the device's identity certificate carries (a UDID is not available on User Enrollment).
+	BYOD           bool
+	ManagedAppleID string
+	SubjectCN      string
 }
 
 // Build returns the profile as an XML property list, with the SCEP challenge in it.
@@ -40,6 +45,10 @@ func Build(o Options, challenge string) ([]byte, error) {
 		org = "Device Management"
 	}
 	scepUUID := uuid()
+	cn := "%HardwareUUID%"
+	if o.SubjectCN != "" {
+		cn = o.SubjectCN
+	}
 	mdm := map[string]interface{}{
 		"PayloadType":             "com.apple.mdm",
 		"PayloadVersion":          1,
@@ -57,6 +66,14 @@ func Build(o Options, challenge string) ([]byte, error) {
 	if o.CheckInURL != "" {
 		mdm["CheckInURL"] = o.CheckInURL
 	}
+	if o.BYOD {
+		if o.ManagedAppleID == "" || o.SubjectCN == "" {
+			return nil, fmt.Errorf("a User Enrollment profile needs the person's Managed Apple Account and a name for the identity certificate")
+		}
+		delete(mdm, "AccessRights") // User Enrollment grants no rights over the device
+		mdm["EnrollmentMode"] = "BYOD"
+		mdm["AssignedManagedAppleID"] = o.ManagedAppleID
+	}
 	scep := map[string]interface{}{
 		"PayloadType":        "com.apple.security.scep",
 		"PayloadVersion":     1,
@@ -66,7 +83,7 @@ func Build(o Options, challenge string) ([]byte, error) {
 		"PayloadContent": map[string]interface{}{
 			"URL":        o.SCEPURL,
 			"Name":       "Device Management Identity",
-			"Subject":    [][][]string{{{"O", org}}, {{"CN", "%HardwareUUID%"}}},
+			"Subject":    [][][]string{{{"O", org}}, {{"CN", cn}}},
 			"Challenge":  challenge,
 			"Key Type":   "RSA",
 			"Keysize":    2048,

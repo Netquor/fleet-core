@@ -39,6 +39,8 @@ type Config struct {
 	OSCheckInterval time.Duration
 	// Lease is how long a worker holds a device (default 2 minutes).
 	Lease time.Duration
+	// AwaitTimeout is how long a device may wait in Setup Assistant for its Setup items before it is released anyway (default 30 minutes).
+	AwaitTimeout time.Duration
 	// PendingTimeout is how long a command may wait for an answer before it is sent again (default 1 hour).
 	PendingTimeout time.Duration
 }
@@ -56,6 +58,9 @@ func (c *Config) defaults() {
 	if c.Lease <= 0 {
 		c.Lease = 2 * time.Minute
 	}
+	if c.AwaitTimeout <= 0 {
+		c.AwaitTimeout = 30 * time.Minute
+	}
 	if c.PendingTimeout <= 0 {
 		c.PendingTimeout = time.Hour
 	}
@@ -69,6 +74,9 @@ type Engine struct {
 	Releases *osreleases.Catalog
 	// DDM, if set, enables declarative device management items (declarations and software updates).
 	DDM *ddm.Store
+	// OnDEPDevice, if set, is told of each device Apple assigns to (or takes from) this server, before it enrolls. Work that can be done in advance (licensing an app to the serial
+	// number) hangs here. removed is true when Apple took the device back.
+	OnDEPDevice func(ctx context.Context, d DEPDevice, removed bool)
 	// Organization names the organization to devices (the organization-info management declaration); empty sends none.
 	Organization string
 	// BaseURL is the server's public address; legacy-profile declarations point devices at it. Without it profiles are always delivered as MDM profiles.
@@ -302,7 +310,7 @@ func (e *Engine) Reconcile(ctx context.Context, d *Device) (time.Time, error) {
 				}
 				desiredIdentifiers[it.Identifier] = true
 				w.identifier = it.Identifier
-				res, err := e.Profiles.Apply(it.Payload, d.Platform, d.OSVersion)
+				res, err := e.Profiles.Apply(it.Payload, d.Platform, d.OSVersion, d.profileOptions()...)
 				if err != nil {
 					w.state, w.note, w.hash = StateNA, err.Error(), it.Hash()
 					break
@@ -345,7 +353,7 @@ func (e *Engine) Reconcile(ctx context.Context, d *Device) (time.Time, error) {
 					}
 				}
 				cmd, _ := commandsGet("InstallProfile")
-				body, uuid, ps := commands.Build(cmd, map[string]any{"Payload": base64.StdEncoding.EncodeToString(res.Profile)}, commands.Options{Platform: d.Platform, OSVersion: d.OSVersion})
+				body, uuid, ps := commands.Build(cmd, map[string]any{"Payload": base64.StdEncoding.EncodeToString(res.Profile)}, commands.Options{Platform: d.Platform, OSVersion: d.OSVersion, UserEnrollment: d.UserEnrollment()})
 				if len(ps) > 0 {
 					w.state, w.note = StateNA, ps[0].Error()
 					break
@@ -358,7 +366,7 @@ func (e *Engine) Reconcile(ctx context.Context, d *Device) (time.Time, error) {
 					break
 				}
 				w.hash = it.Hash()
-				body, uuid, ps := commands.Build(cmd, it.Params, commands.Options{Platform: d.Platform, OSVersion: d.OSVersion})
+				body, uuid, ps := commands.Build(cmd, it.Params, commands.Options{Platform: d.Platform, OSVersion: d.OSVersion, UserEnrollment: d.UserEnrollment()})
 				if len(ps) > 0 {
 					w.state, w.note = StateNA, ps[0].Error()
 					break
@@ -556,7 +564,7 @@ func (e *Engine) Reconcile(ctx context.Context, d *Device) (time.Time, error) {
 			continue
 		}
 		cmd, _ := commandsGet("RemoveProfile")
-		body, uuid, ps := commands.Build(cmd, map[string]any{"Identifier": a.Identifier}, commands.Options{Platform: d.Platform, OSVersion: d.OSVersion})
+		body, uuid, ps := commands.Build(cmd, map[string]any{"Identifier": a.Identifier}, commands.Options{Platform: d.Platform, OSVersion: d.OSVersion, UserEnrollment: d.UserEnrollment()})
 		if len(ps) > 0 {
 			return next, errors.New(ps[0].Error())
 		}
@@ -568,6 +576,13 @@ func (e *Engine) Reconcile(ctx context.Context, d *Device) (time.Time, error) {
 			return next, err
 		}
 		soonest(now.Add(e.Cfg.PendingTimeout))
+	}
+
+	// 3b. a device held in Setup Assistant is released once what it waits for is done
+	if d.Awaiting {
+		if err := e.releaseIfReady(ctx, d, wants, now, soonest); err != nil {
+			return next, err
+		}
 	}
 
 	// 4. keep the device's OS version fresh: it decides what applies and which devices are out of date
@@ -693,7 +708,7 @@ func (e *Engine) reconcileDeclarations(ctx context.Context, d *Device, wants []*
 		if w.item.Kind == "profile" && a != nil && a.Delivery != "declarative" && a.State != StateNA {
 			if a.State != StateRemoving || a.UpdatedAt.Add(e.Cfg.PendingTimeout).Before(now) {
 				cmd, _ := commandsGet("RemoveProfile")
-				body, uuid, ps := commands.Build(cmd, map[string]any{"Identifier": w.identifier}, commands.Options{Platform: d.Platform, OSVersion: d.OSVersion})
+				body, uuid, ps := commands.Build(cmd, map[string]any{"Identifier": w.identifier}, commands.Options{Platform: d.Platform, OSVersion: d.OSVersion, UserEnrollment: d.UserEnrollment()})
 				if len(ps) > 0 {
 					return errors.New(ps[0].Error())
 				}
@@ -807,7 +822,7 @@ func (e *Engine) syncChannel(ctx context.Context, d *Device, target string, decl
 	// The command carries the tokens (Apple allows this), so a channel that is already current skips its first round trip.
 	tokens, _ := json.Marshal(map[string]any{"SyncTokens": map[string]any{"DeclarationsToken": st.Token, "Timestamp": st.UpdatedAt.UTC().Format(time.RFC3339)}})
 	cmd, _ := commandsGet("DeclarativeManagement")
-	body, _, ps := commands.Build(cmd, map[string]any{"Data": base64.StdEncoding.EncodeToString(tokens)}, commands.Options{Platform: d.Platform, OSVersion: d.OSVersion})
+	body, _, ps := commands.Build(cmd, map[string]any{"Data": base64.StdEncoding.EncodeToString(tokens)}, commands.Options{Platform: d.Platform, OSVersion: d.OSVersion, UserEnrollment: d.UserEnrollment()})
 	if len(ps) > 0 {
 		return errors.New(ps[0].Error())
 	}
@@ -844,9 +859,68 @@ func (e *Engine) osUpdateCommand(d *Device, it Item) (cmd *commands.Command, bod
 	if action == "" {
 		action = "Default"
 	}
-	body, uuid, ps := commands.Build(cmd, map[string]any{"Updates": []any{map[string]any{"ProductVersion": rel.Version, "InstallAction": action}}}, commands.Options{Platform: d.Platform, OSVersion: d.OSVersion})
+	body, uuid, ps := commands.Build(cmd, map[string]any{"Updates": []any{map[string]any{"ProductVersion": rel.Version, "InstallAction": action}}}, commands.Options{Platform: d.Platform, OSVersion: d.OSVersion, UserEnrollment: d.UserEnrollment()})
 	if len(ps) > 0 {
 		return cmd, nil, "", "", ps[0].Error(), false
 	}
 	return cmd, body, uuid, rel.Version, "ScheduleOSUpdate " + rel.Version + " (" + action + "): this device cannot take declarative enforcement", true
+}
+
+// releaseIfReady sends DeviceConfigured to a device waiting in Setup Assistant when every Setup item is applied, not applicable or failed for good, or the wait ran out.
+func (e *Engine) releaseIfReady(ctx context.Context, d *Device, wants []*want, now time.Time, soonest func(time.Time)) error {
+	apps, err := e.Store.Applications(ctx, d.ID)
+	if err != nil {
+		return err
+	}
+	state := map[string]*Application{}
+	for i := range apps {
+		state[appKey(apps[i].Blueprint, apps[i].Item)] = &apps[i]
+	}
+	waiting := 0
+	for _, w := range wants {
+		if !w.item.Setup {
+			continue
+		}
+		a := state[appKey(w.bp.ID, w.item.ID)]
+		done := a != nil && (a.State == StateApplied || a.State == StateNA || (a.State == StateFailed && a.Attempts >= 3))
+		if !done {
+			waiting++
+		}
+	}
+	timedOut := !d.AwaitingSince.IsZero() && now.Sub(d.AwaitingSince) >= e.Cfg.AwaitTimeout
+	if waiting > 0 && !timedOut {
+		soonest(now.Add(30 * time.Second))
+		return nil
+	}
+	cmd, _ := commandsGet("DeviceConfigured")
+	body, _, ps := commands.Build(cmd, map[string]any{}, commands.Options{Platform: d.Platform, OSVersion: d.OSVersion, UserEnrollment: d.UserEnrollment()})
+	if len(ps) > 0 {
+		// not a command this device has: it cannot be waiting on it
+		return e.Store.SetDeviceFields(ctx, d.ID, bson.D{{Key: "awaiting", Value: false}}, false)
+	}
+	if err := e.Enq.Enqueue(ctx, []string{d.ID}, body); err != nil {
+		return fmt.Errorf("releasing the device from Setup Assistant: %w", err)
+	}
+	return e.Store.SetDeviceFields(ctx, d.ID, bson.D{{Key: "awaiting", Value: false}, {Key: "released_at", Value: now}}, false)
+}
+
+// DEPDeviceEvent records a device Apple assigned (or took back) and tells whoever waits for it. The device is also looked at again if it is already enrolled.
+func (e *Engine) DEPDeviceEvent(ctx context.Context, d DEPDevice, removed bool) {
+	var err error
+	if removed {
+		err = e.Store.ForgetDEP(ctx, d.Serial)
+	} else {
+		err = e.Store.RecordDEP(ctx, d)
+	}
+	if err != nil {
+		e.Logger.Info("msg", "recording a DEP device", "serial", d.Serial, "err", err)
+		return
+	}
+	if !removed {
+		// an enrolled device with this serial learns its DEP name now
+		_, _ = e.Store.db.Collection(cDevices).UpdateMany(ctx, e.Store.scope(bson.D{{Key: "serial", Value: d.Serial}}), bson.D{{Key: "$set", Value: bson.D{{Key: "dep_name", Value: d.DEPName}, {Key: "reconcile_at", Value: e.Now()}}}})
+	}
+	if e.OnDEPDevice != nil {
+		e.OnDEPDevice(ctx, d, removed)
+	}
 }

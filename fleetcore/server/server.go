@@ -15,14 +15,17 @@ import (
 	"time"
 
 	kitlog "github.com/go-kit/kit/log"
+	"github.com/micromdm/nanodep/godep"
 	nlhttp "github.com/micromdm/nanolib/http"
 	"github.com/micromdm/nanolib/http/trace"
 	"github.com/micromdm/nanolib/log"
 	nanoapi "github.com/micromdm/nanomdm/api"
 	"github.com/micromdm/nanomdm/certverify"
 	"github.com/micromdm/nanomdm/cryptoutil"
+	"github.com/micromdm/nanomdm/fleetcore/admin"
 	"github.com/micromdm/nanomdm/fleetcore/applicability"
 	"github.com/micromdm/nanomdm/fleetcore/blueprints"
+	"github.com/micromdm/nanomdm/fleetcore/byod"
 	"github.com/micromdm/nanomdm/fleetcore/commands"
 	"github.com/micromdm/nanomdm/fleetcore/ddm"
 	"github.com/micromdm/nanomdm/fleetcore/dep"
@@ -31,6 +34,8 @@ import (
 	"github.com/micromdm/nanomdm/fleetcore/pki"
 	"github.com/micromdm/nanomdm/fleetcore/schemas"
 	"github.com/micromdm/nanomdm/fleetcore/seal"
+	"github.com/micromdm/nanomdm/fleetcore/vault"
+	"github.com/micromdm/nanomdm/fleetcore/workflows"
 	httpapi "github.com/micromdm/nanomdm/http/api"
 	httpmdm "github.com/micromdm/nanomdm/http/mdm"
 	"github.com/micromdm/nanomdm/push/nanopush"
@@ -107,6 +112,12 @@ type Config struct {
 	// Sealer seals secrets at rest with this tenant's key (seal.Keyring.For(tenant), or seal.ForTenantKeys when the server holds only its tenant's key). Without one, secrets are stored as
 	// given: development only. Give the same sealer to the MongoDB storage (mongodb.WithSealer), which the server does not create.
 	Sealer seal.Interface
+	// BYOD turns on account-driven User Enrollment (personal devices signed in with a Managed Apple Account). Nil: off.
+	BYOD *BYODConfig
+	// ADERoots are the trust anchors for the device certificates that sign an Automated Device Enrollment request; nil uses Apple's.
+	ADERoots *x509.CertPool
+	// MAIDDEPName is the DEP name whose key signs Managed Apple Account tokens; empty uses the only DEP name there is.
+	MAIDDEPName string
 	// NoFeeds stops the server from reaching out to Apple (the device-management schemas on GitHub, the OS releases feed). The built-in snapshot is used.
 	NoFeeds bool
 
@@ -114,6 +125,13 @@ type Config struct {
 	Debug  bool
 	// Version is shown at /version.
 	Version string
+}
+
+// BYODConfig sets up account-driven User Enrollment.
+type BYODConfig struct {
+	Auth byod.Authenticator
+	// LoginURL is the identity provider's sign-in page for devices that have no token yet.
+	LoginURL string
 }
 
 // Server is a configured fleetcore.
@@ -208,10 +226,11 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		ddmStore.Sealer = sealer
 	}
 	ddmSvc := &ddm.Service{Store: ddmStore}
+	tokenMux := nanomdm.NewTokenMux()
 	nano := nanomdm.New(cfg.Storage,
 		nanomdm.WithDeclarativeManagement(ddmSvc),
 		nanomdm.WithUserAuthenticate(nanomdm.NewUAService(cfg.Storage, false)),
-		nanomdm.WithGetToken(nanomdm.NewTokenMux()),
+		nanomdm.WithGetToken(tokenMux),
 		nanomdm.WithLogger(logger.With("service", "nanomdm")))
 	var popts []nanopush.Option
 	if cfg.PushURL != "" {
@@ -243,6 +262,20 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		return nil, err
 	}
 	engine := blueprints.New(bpStore, pushEnqueuer{pe}, profileRules, catalog, logger.With("service", "blueprints"), blueprints.Config{})
+	vaultStore, err := vault.NewStore(ctx, cfg.PKIDB, cfg.PKITenant)
+	if err != nil {
+		return nil, fmt.Errorf("vault: %w", err)
+	}
+	if sealer != nil {
+		vaultStore.Sealer = sealer
+	}
+	wf, err := workflows.New(ctx, cfg.PKIDB, cfg.PKITenant, bpStore, pushEnqueuer{pe}, vaultStore, logger.With("service", "workflows"))
+	if err != nil {
+		return nil, fmt.Errorf("workflows: %w", err)
+	}
+	if sealer != nil {
+		wf.Sealer = sealer
+	}
 	engine.DDM = ddmStore
 	engine.BaseURL = cfg.BaseURL
 	engine.Organization = cfg.Organization
@@ -254,7 +287,17 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	}
 	schemas.OnChange(func(*schemas.Set) { _ = bpStore.Touch(context.Background(), blueprints.Rule{}) })
 
+	var byodStore *byod.Store
+	if cfg.BYOD != nil {
+		if byodStore, err = byod.NewStore(ctx, cfg.PKIDB, cfg.PKITenant); err != nil {
+			return nil, fmt.Errorf("byod: %w", err)
+		}
+	}
 	observer := &blueprints.Observer{Store: bpStore, DDM: ddmStore, Logger: logger.With("service", "observer")}
+	observer.OnResult = append(observer.OnResult, wf.HandleResult)
+	if byodStore != nil {
+		observer.BYOD = byodStore
+	}
 	svcs := []service.CheckinAndCommandService{nano, observer}
 	if cfg.WebhookURL != "" {
 		whOpts := []webhook.Option{webhook.WithTokenUpdateTalley(cfg.Storage), webhook.WithEventID(trace.GetTraceID)}
@@ -328,6 +371,11 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		prof.CheckInURL = cfg.BaseURL + endpointCheckin
 	}
 	mux.Handle(endpointEnroll, enroll.Handler(prof, challenges, cfg.EnrollAuthorize))
+	if cfg.BYOD != nil {
+		// Account-driven User Enrollment: the endpoint wants the person's token from the identity provider; the discovery document points devices at it.
+		mux.Handle("/enroll/byod", byod.Handler(byod.Config{Auth: cfg.BYOD.Auth, LoginURL: cfg.BYOD.LoginURL, Profile: prof, Challenges: challenges, Store: byodStore}))
+		mux.Handle("/.well-known/com.apple.remotemanagement", byod.WellKnown(cfg.BaseURL+"/enroll/byod"))
+	}
 	mux.HandleFunc("/ca.pem", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/x-pem-file")
 		_, _ = w.Write(caPEM)
@@ -366,8 +414,11 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 					who = "api key"
 				}
 			}
+			if actor := r.Header.Get("X-Actor"); actor != "" && who != "" { // a control plane names the person it acts for
+				who += " (" + actor + ")"
+			}
 			logger.Info("msg", "admin api", "who", who, "method", r.Method, "path", r.URL.Path)
-			next.ServeHTTP(w, r)
+			next.ServeHTTP(w, r.WithContext(admin.With(r.Context(), who)))
 		})
 	}
 
@@ -382,6 +433,23 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		if depSvc, err = dep.NewService(ctx, cfg.PKIDB, depStore, cfg.PKITenant, logger.With("service", "dep")); err != nil {
 			return nil, fmt.Errorf("dep service: %w", err)
 		}
+		depSvc.EnrollURL = cfg.BaseURL + "/enroll/ade"
+		depSvc.OnDevices = func(ctx context.Context, name string, isFetch bool, resp *godep.FetchDeviceResponseJson) {
+			supervised, _ := depSvc.ProfileFacts(ctx, name)
+			for _, d := range resp.Devices {
+				dd := blueprints.DEPDevice{Serial: d.SerialNumber, Model: d.Model, DEPName: name, Supervised: supervised}
+				if d.Os != nil {
+					dd.OS = string(*d.Os)
+				}
+				if d.DeviceAssignedDate != nil {
+					dd.AssignedAt = *d.DeviceAssignedDate
+				}
+				engine.DEPDeviceEvent(ctx, dd, d.OpType != nil && *d.OpType == godep.DeviceJsonOpTypeDeleted)
+			}
+		}
+		// A device Apple assigned to this server asks for its enrollment profile here, with no code or sign-in.
+		mux.Handle("/enroll/ade", (&dep.ADE{Roots: cfg.ADERoots, Service: depSvc, Profile: prof, Challenges: challenges}).Handler())
+		tokenMux.Handle("com.apple.maid", depSvc.GetToken(cfg.MAIDDEPName))
 		mux.Handle("/v1/dep/", adminAuth(depSvc.Handler("/v1/dep")))
 
 		apiAuth := nlhttp.NewMWMux(mux)
@@ -395,7 +463,15 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		}); ok {
 			results = resultAdapter{rr}
 		}
-		ch, err := commands.Handler("/v1/commands", commands.Default(), cfg.Storage, ps, results, logger.With("handler", "commands"))
+		var cl commands.Lister
+		if l, ok := cfg.Storage.(lister); ok {
+			cl = commandLister{l}
+			lh := adminAuth(http.StripPrefix("/v1", listingHandler(l)))
+			for _, p := range []string{"/v1/enrollments", "/v1/enrollments/", "/v1/queue"} {
+				mux.Handle(p, lh)
+			}
+		}
+		ch, err := commands.Handler("/v1/commands", commands.Default(), cfg.Storage, ps, results, cl, logger.With("handler", "commands"))
 		if err != nil {
 			return nil, fmt.Errorf("command api: %w", err)
 		}
@@ -404,8 +480,13 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 
 		// ---- blueprints, groups, devices, platform applicability, schemas, OS releases ----
 		bpAPI := &blueprints.API{Engine: engine, Applicability: profileRules, OSReleases: relFeed, SchemaRefresher: schemaFeed}
-		bpHandler := adminAuth(http.StripPrefix("/v1", bpAPI.Handler()))
-		for _, p := range []string{"/v1/blueprints", "/v1/blueprints/", "/v1/groups", "/v1/groups/", "/v1/devices/", "/v1/applicability", "/v1/applicability/", "/v1/schemas", "/v1/schemas/", "/v1/os-releases", "/v1/os-releases/", "/v1/ddm/"} {
+		var bootstrap workflows.BootstrapReader
+		if b, ok := cfg.Storage.(workflows.BootstrapReader); ok {
+			bootstrap = b
+		}
+		wfAPI := &workflows.API{S: wf, Bootstrap: bootstrap}
+		bpHandler := adminAuth(http.StripPrefix("/v1", wfAPI.Handler(bpAPI.Handler())))
+		for _, p := range []string{"/v1/blueprints", "/v1/blueprints/", "/v1/groups", "/v1/groups/", "/v1/devices", "/v1/devices/", "/v1/applicability", "/v1/applicability/", "/v1/schemas", "/v1/schemas/", "/v1/os-releases", "/v1/os-releases/", "/v1/ddm/"} {
 			mux.Handle(p, bpHandler)
 		}
 	}

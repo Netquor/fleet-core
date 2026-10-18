@@ -1,6 +1,7 @@
 package mongodb
 
 import (
+	"context"
 	"errors"
 
 	"github.com/micromdm/nanomdm/mdm"
@@ -50,4 +51,20 @@ func (s *MongoDBStorage) RetrieveBootstrapToken(r *mdm.Request, _ *mdm.GetBootst
 		err = s.updateLastSeen(r)
 	}
 	return bs, err
+}
+
+// BootstrapTokenString returns the device's bootstrap token as it is stored for the device (base64); ok is false when there is none.
+func (s *MongoDBStorage) BootstrapTokenString(ctx context.Context, id string) (string, bool, error) {
+	var d struct {
+		Token *string `bson:"bootstrap_token_b64"`
+	}
+	err := s.db.Collection(cDevices).FindOne(ctx, bson.D{{Key: "_id", Value: s.pk(id)}}, options.FindOne().SetProjection(bson.D{{Key: "bootstrap_token_b64", Value: 1}})).Decode(&d)
+	if errors.Is(err, mongo.ErrNoDocuments) || (err == nil && d.Token == nil) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	tok, err := s.open("mdm.bootstrap", *d.Token)
+	return string(tok), err == nil, err
 }

@@ -31,6 +31,8 @@ func (p Problem) Error() string {
 type Options struct {
 	// Platform (macOS, iOS, tvOS, visionOS, watchOS), if known, rejects commands and keys that do not exist there.
 	Platform string
+	// UserEnrollment, for a device enrolled with User Enrollment (BYOD), rejects commands and keys Apple's schema forbids there: the organization may not wipe, lock or inspect it.
+	UserEnrollment bool
 	// OSVersion, if known with Platform, rejects commands Apple has removed by that version and keys it has removed.
 	OSVersion string
 	// CommandUUID to use; empty makes a random one.
@@ -49,7 +51,15 @@ func Build(c *Command, params map[string]any, o Options) (plistXML []byte, uuid 
 			problems = append(problems, Problem{Message: msg})
 		}
 	}
+	if o.UserEnrollment {
+		if info, ok := c.OS[schemas.SchemaOS(o.Platform)]; ok && info.UserEnrollment == "forbidden" || (!ok && o.Platform == "" && anyForbidden(c)) {
+			problems = append(problems, Problem{Message: c.RequestType + " is not allowed on a device enrolled with User Enrollment (BYOD)"})
+		}
+	}
 	body, ps := convertDict(c.Keys, params, "", o.Platform)
+	if o.UserEnrollment {
+		ps = append(ps, forbiddenKeys(c.Keys, params, "", o.Platform)...)
+	}
 	problems = append(problems, ps...)
 	if len(problems) > 0 {
 		return nil, "", problems
@@ -352,4 +362,39 @@ func listAllowed(list []any) string {
 func Check(keys []Key, in map[string]any, platform string) []Problem {
 	_, ps := convertDict(keys, in, "", platform)
 	return ps
+}
+
+// anyForbidden is true when a command is forbidden on User Enrollment on every platform that has it (used when the platform is not known).
+func anyForbidden(c *Command) bool {
+	n, forbidden := 0, 0
+	for _, info := range c.OS {
+		if info.Unsupported() {
+			continue
+		}
+		n++
+		if info.UserEnrollment == "forbidden" {
+			forbidden++
+		}
+	}
+	return n > 0 && n == forbidden
+}
+
+// forbiddenKeys lists the keys in params that Apple's schema forbids on User Enrollment.
+func forbiddenKeys(keys []Key, in map[string]any, path, platform string) []Problem {
+	var out []Problem
+	for _, k := range keys {
+		v, present := in[k.Key]
+		if !present {
+			continue
+		}
+		p := join(path, k.Key)
+		if info, ok := k.OS[schemas.SchemaOS(platform)]; ok && info.UserEnrollment == "forbidden" {
+			out = append(out, Problem{Path: p, Message: "is not allowed on a device enrolled with User Enrollment (BYOD)"})
+			continue
+		}
+		if m, ok := v.(map[string]any); ok && k.Type == "dictionary" {
+			out = append(out, forbiddenKeys(k.Keys, m, p, platform)...)
+		}
+	}
+	return out
 }

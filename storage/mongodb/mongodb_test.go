@@ -3,6 +3,7 @@ package mongodb
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -342,4 +343,94 @@ func TestMongoDBRewrap(t *testing.T) {
 		t.Errorf("after rotation the old key should not be needed and nothing left to change: %d %v", n, err)
 	}
 	assertSealed(t, ctx, final)
+}
+
+// Paging through the queue, enrollments and history shows every row once, in order, even when rows are added between pages.
+func TestMongoDBPaging(t *testing.T) {
+	uri := os.Getenv("NANOMDM_MONGODB_STORAGE_TEST_URI")
+	if uri == "" {
+		t.Skip("NANOMDM_MONGODB_STORAGE_TEST_URI not set")
+	}
+	ctx := context.Background()
+	s, err := New(ctx, WithURI(uri), WithTenant("acme"), WithoutIndexes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close(ctx)
+	if err := s.db.Drop(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.EnsureIndexes(ctx); err != nil {
+		t.Fatal(err)
+	}
+	other, _ := New(ctx, WithURI(uri), WithTenant("globex"), WithoutIndexes())
+	defer other.Close(ctx)
+
+	cmd := func(uuid, typ string) *mdm.Command {
+		c := &mdm.Command{CommandUUID: uuid, Raw: []byte(`<?xml version="1.0"?><plist version="1.0"><dict><key>CommandUUID</key><string>` + uuid + `</string><key>Command</key><dict><key>RequestType</key><string>` + typ + `</string></dict></dict></plist>`)}
+		c.Command.RequestType = typ
+		return c
+	}
+	for i := 0; i < 25; i++ {
+		typ := "DeviceInformation"
+		if i%5 == 0 {
+			typ = "ProfileList"
+		}
+		if _, err := s.EnqueueCommand(ctx, []string{"dev"}, cmd(fmt.Sprintf("C%02d", i), typ)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := other.EnqueueCommand(ctx, []string{"dev"}, cmd("OTHER", "DeviceInformation")); err != nil {
+		t.Fatal(err)
+	}
+	var seen []string
+	after := ""
+	for page := 0; page < 20; page++ {
+		rows, next, err := s.ListQueue(ctx, QueueFilter{ID: "dev"}, Page{After: after, Limit: 7})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range rows {
+			seen = append(seen, r.CommandUUID)
+			if r.Status != "Queued" || r.RequestType == "" {
+				t.Errorf("row %+v", r)
+			}
+		}
+		if page == 1 { // rows added while paging do not disturb it
+			if _, err := s.EnqueueCommand(ctx, []string{"dev"}, cmd("LATE", "DeviceInformation")); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if next == "" {
+			break
+		}
+		after = next
+	}
+	if len(seen) != 26 || seen[0] != "C00" || seen[24] != "C24" || seen[25] != "LATE" {
+		t.Errorf("paging: %d rows %v", len(seen), seen)
+	}
+	dup := map[string]bool{}
+	for _, u := range seen {
+		if dup[u] || u == "OTHER" {
+			t.Errorf("%s repeated, or another tenant's row", u)
+		}
+		dup[u] = true
+	}
+	if rows, _, _ := s.ListQueue(ctx, QueueFilter{ID: "dev", RequestType: "ProfileList"}, Page{}); len(rows) != 5 {
+		t.Errorf("by request type: %d", len(rows))
+	}
+	hist, next, err := s.ListCommands(ctx, "", false, Page{Limit: 10})
+	if err != nil || len(hist) != 10 || next == "" || hist[0].CommandUUID != "LATE" {
+		t.Errorf("history: %v %v %v", len(hist), next, err)
+	}
+	hist2, _, _ := s.ListCommands(ctx, "", true, Page{After: next, Limit: 10})
+	if len(hist2) != 10 || hist2[0].CommandUUID == hist[9].CommandUUID || hist2[0].Command["Command"] == nil {
+		t.Errorf("second history page: %+v", hist2)
+	}
+	if _, _, err := s.ListQueue(ctx, QueueFilter{}, Page{After: "!!"}); err == nil {
+		t.Error("a bad cursor was accepted")
+	}
+	if rows, _, _ := s.ListQueue(ctx, QueueFilter{Status: "acknowledged"}, Page{}); len(rows) != 0 {
+		t.Errorf("nothing is acknowledged yet: %d", len(rows))
+	}
 }

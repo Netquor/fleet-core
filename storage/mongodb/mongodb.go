@@ -231,6 +231,7 @@ func (s *MongoDBStorage) EnsureIndexes(ctx context.Context) error {
 			return idx(cEnrollments,
 				mongo.IndexModel{Keys: key("device_id", 1)},
 				mongo.IndexModel{Keys: key("type", 1)},
+				mongo.IndexModel{Keys: key("id", 1)}, // paging through enrollments
 				mongo.IndexModel{Keys: key("user_id", 1), Options: options.Index().SetUnique(true).SetPartialFilterExpression(bson.D{{Key: "user_id", Value: bson.D{{Key: "$type", Value: "string"}}}})})
 		},
 		func() error {
@@ -238,6 +239,10 @@ func (s *MongoDBStorage) EnsureIndexes(ctx context.Context) error {
 				mongo.IndexModel{Keys: key("id", 1, "command_uuid", 1), Options: unique},
 				mongo.IndexModel{Keys: key("id", 1, "active", 1, "status", 1, "priority", -1, "created_at", 1)},
 				mongo.IndexModel{Keys: key("command_uuid", 1)})
+		},
+		func() error {
+			// command history, newest first, and by type
+			return idx(cCommands, mongo.IndexModel{Keys: key("created_at", -1, "_id", -1)}, mongo.IndexModel{Keys: key("request_type", 1, "created_at", -1)})
 		},
 		func() error {
 			return idx(cCertAuth,

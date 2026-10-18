@@ -2,7 +2,14 @@ package dep
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"github.com/micromdm/nanodep/cryptoutil"
+	"github.com/micromdm/nanomdm/mdm"
+	"github.com/micromdm/nanomdm/service"
 	"net/http"
 	"strings"
 	"sync"
@@ -32,6 +39,8 @@ type Service struct {
 	db     *mongo.Database
 	tid    string
 
+	// EnrollURL is the default URL in DEP profiles (this server's /enroll/ade).
+	EnrollURL string
 	// Interval between syncs of one DEP name (default 30 minutes).
 	Interval time.Duration
 	// OnDevices, if set, is called after each sync or fetch response (after devices are recorded).
@@ -94,6 +103,7 @@ func (s *Service) Handler(prefix string) http.Handler {
 	names.Handle("GET", apinext.NewQueryDEPNamesHandler(s.Store, l.With("handler", "dep-names")))
 	strip("/names", names)
 
+	s.profileRoute(mux, prefix)
 	mux.HandleFunc(prefix+"/devices/", s.devicesHandler(prefix+"/devices/"))
 	mux.HandleFunc(prefix+"/sync/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -287,4 +297,118 @@ func (s *Service) scope(f bson.D) bson.D {
 		return f
 	}
 	return append(bson.D{{Key: "t", Value: s.tid}}, f...)
+}
+
+// MAIDJWT makes the token a device presents to sign in with a Managed Apple Account during account-driven enrollment: a JWT signed with the DEP name's token-exchange key, naming
+// the MDM server as Apple Business Manager knows it.
+func (s *Service) MAIDJWT(ctx context.Context, name string) (string, error) {
+	detail, err := s.client.AccountDetail(ctx, name)
+	if err != nil {
+		return "", fmt.Errorf("account detail: %w", err)
+	}
+	if detail.ServerUuid == nil || *detail.ServerUuid == "" {
+		return "", errors.New("Apple Business Manager did not name the MDM server")
+	}
+	_, keyPEM, err := s.Store.RetrieveCurrentTokenPKI(ctx, name)
+	if err != nil {
+		return "", fmt.Errorf("token key: %w", err)
+	}
+	key, err := cryptoutil.RSAKeyFromPEM(keyPEM)
+	if err != nil {
+		return "", err
+	}
+	jti := make([]byte, 16)
+	_, _ = rand.Read(jti)
+	return cryptoutil.NewMAIDJWT(key, *detail.ServerUuid, time.Now(), hex.EncodeToString(jti))
+}
+
+// GetToken answers the device's GetToken check-in for com.apple.maid. Name is the DEP name to sign for; empty uses the only one there is.
+func (s *Service) GetToken(name string) service.GetToken {
+	return tokenFunc(func(r *mdm.Request, m *mdm.GetToken) (*mdm.GetTokenResponse, error) {
+		n := name
+		if n == "" {
+			res, err := s.Store.QueryDEPNames(r.Context(), &depstorage.DEPNamesQueryRequest{})
+			if err != nil {
+				return nil, err
+			}
+			if len(res.DEPNames) != 1 {
+				return nil, fmt.Errorf("%d DEP names: say which one signs Managed Apple Account tokens", len(res.DEPNames))
+			}
+			n = res.DEPNames[0]
+		}
+		jwt, err := s.MAIDJWT(r.Context(), n)
+		if err != nil {
+			return nil, err
+		}
+		return &mdm.GetTokenResponse{TokenData: []byte(jwt)}, nil
+	})
+}
+
+type tokenFunc func(*mdm.Request, *mdm.GetToken) (*mdm.GetTokenResponse, error)
+
+func (f tokenFunc) GetToken(r *mdm.Request, m *mdm.GetToken) (*mdm.GetTokenResponse, error) {
+	return f(r, m)
+}
+
+// serialsOf lists the serial numbers recorded for a DEP name.
+func (s *Service) serialsOf(ctx context.Context, name string) ([]string, error) {
+	cur, err := s.db.Collection(devicesCollection).Find(ctx, s.scope(bson.D{{Key: "dep", Value: name}}), options.Find().SetProjection(bson.D{{Key: "serial", Value: 1}}))
+	if err != nil {
+		return nil, err
+	}
+	var rows []struct {
+		Serial string `bson:"serial"`
+	}
+	if err := cur.All(ctx, &rows); err != nil {
+		return nil, err
+	}
+	out := make([]string, len(rows))
+	for i, r := range rows {
+		out[i] = r.Serial
+	}
+	return out, nil
+}
+
+// Lookup says which DEP name a serial number is assigned to; ok is false for a device Apple has not assigned to this server.
+func (s *Service) Lookup(ctx context.Context, serial string) (name string, ok bool, err error) {
+	var row struct {
+		Dep string `bson:"dep"`
+	}
+	err = s.db.Collection(devicesCollection).FindOne(ctx, s.scope(bson.D{{Key: "serial", Value: serial}})).Decode(&row)
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		return "", false, nil
+	}
+	return row.Dep, err == nil, err
+}
+
+// setProfileFacts records what the DEP name's profile promises, so that devices Apple assigns to it can be treated accordingly (supervised, held in Setup Assistant).
+func (s *Service) setProfileFacts(ctx context.Context, name, uuid string, supervised, awaiting bool) error {
+	return s.Store.set(ctx, name, bson.D{{Key: "profile_uuid", Value: uuid}, {Key: "profile_supervised", Value: supervised}, {Key: "profile_awaiting", Value: awaiting}})
+}
+
+// ProfileFacts returns what the DEP name's last defined profile promises (supervised true by default).
+func (s *Service) ProfileFacts(ctx context.Context, name string) (supervised, awaiting bool) {
+	var d struct {
+		Supervised *bool `bson:"profile_supervised"`
+		Awaiting   *bool `bson:"profile_awaiting"`
+	}
+	_ = s.Store.c.FindOne(ctx, bson.D{{Key: "_id", Value: s.Store.key(name)}}).Decode(&d)
+	supervised, awaiting = true, true
+	if d.Supervised != nil {
+		supervised = *d.Supervised
+	}
+	if d.Awaiting != nil {
+		awaiting = *d.Awaiting
+	}
+	return
+}
+
+// fetched builds a device response for the given serial numbers (tests and tools).
+func fetched(serials ...string) *godep.FetchDeviceResponseJson {
+	resp := &godep.FetchDeviceResponseJson{}
+	added := godep.DeviceJsonOpTypeAdded
+	for _, s := range serials {
+		resp.Devices = append(resp.Devices, godep.DeviceJson{SerialNumber: s, Model: "MacBook Air", OpType: &added})
+	}
+	return resp
 }

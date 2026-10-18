@@ -1,6 +1,9 @@
 package blueprints
 
 import (
+	"context"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"strings"
 	"testing"
 	"time"
@@ -567,5 +570,193 @@ func TestLegacyProfileAsAssetOn27AndStatusExtras(t *testing.T) {
 	// an unknown status item is refused when saving
 	if err := (&Blueprint{ID: "x", StatusItems: []string{"no.such.item"}}).Prepare(); err == nil {
 		t.Error("an unknown status item was accepted")
+	}
+}
+
+type fakePeople map[string]string
+
+func (f fakePeople) ManagedAppleID(_ context.Context, cn string) string { return f[cn] }
+
+func TestUserEnrollmentRules(t *testing.T) {
+	f := newFixture(t)
+	f.obs.BYOD = fakePeople{"ue-abc": "alice@example.com"}
+	cert := &x509.Certificate{Subject: pkix.Name{CommonName: "ue-abc"}}
+	au := func(id string, typ mdm.EnrollType, c *x509.Certificate) {
+		r := mdm.NewRequestWithContext(f.ctx, c)
+		r.EnrollID = &mdm.EnrollID{ID: id, Type: typ}
+		raw := []byte(`<?xml version="1.0"?><plist version="1.0"><dict><key>OSVersion</key><string>18.2</string><key>ProductName</key><string>iPhone16,1</string></dict></plist>`)
+		if err := f.obs.Authenticate(r, &mdm.Authenticate{Raw: raw}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	au("ue1", mdm.UserEnrollment, cert)
+	au("dev1", mdm.Device, nil)
+	d, _ := f.store.GetDevice(f.ctx, "ue1")
+	if d.ManagedAppleID != "alice@example.com" || !d.UserEnrollment() || d.EnrollKind() != "user" {
+		t.Fatalf("the BYOD device is not tied to its person: %+v", d)
+	}
+	if other, _ := f.store.GetDevice(f.ctx, "dev1"); other.ManagedAppleID != "" || other.UserEnrollment() {
+		t.Errorf("a normal enrollment picked up a person: %+v", other)
+	}
+	// the person is a field smart groups can use
+	env, _ := f.eng.Env(f.ctx)
+	x, _ := Rule{Field: "user", Op: "eq", Value: "alice@example.com"}.Expand(env)
+	ds, _ := f.store.QueryDevices(f.ctx, x, "", 10)
+	if len(ds) != 1 || ds[0].ID != "ue1" || !x.Match(&ds[0]) {
+		t.Errorf("rule on the person: %v", ds)
+	}
+
+	// What Apple forbids on User Enrollment is not sent: a command, and the part of a profile that is forbidden.
+	var forbiddenPayload string
+	for _, p := range schemas.Current().Profiles {
+		if i, ok := p.OS["iOS"]; ok && !i.Unsupported() && i.UserEnrollment == "forbidden" {
+			forbiddenPayload = p.PayloadType
+			break
+		}
+	}
+	items := []Item{{ID: "where", Kind: "command", RequestType: "DeviceLocation"}}
+	if forbiddenPayload != "" {
+		items = append(items, Item{ID: "mixed", Kind: "profile", Payload: profile("com.example.mixed", payload(forbiddenPayload, "")+payload("com.apple.wifi.managed", `<key>SSID_STR</key><string>x</string>`))})
+	}
+	f.save(Blueprint{ID: "ue", Enabled: true, Items: items})
+	f.reconcile()
+	if a := appFor(f, "ue1", "where"); a.State != StateNA || !strings.Contains(a.Note, "User Enrollment") {
+		t.Errorf("DeviceLocation on a BYOD device: %+v", a)
+	}
+	if a := appFor(f, "dev1", "where"); a.State == StateNA {
+		t.Errorf("DeviceLocation on a normal enrollment must be sent: %+v", a)
+	}
+	if forbiddenPayload != "" {
+		if a := appFor(f, "ue1", "mixed"); !strings.Contains(a.Note, "left out") {
+			t.Errorf("the forbidden payload was not left out: %+v", a)
+		}
+		if a := appFor(f, "dev1", "mixed"); strings.Contains(a.Note, forbiddenPayload) {
+			t.Errorf("a normal enrollment lost %s: %+v", forbiddenPayload, a)
+		}
+	}
+}
+
+func (f *fixture) awaitingMac(id, serial string) {
+	r := mdm.NewRequestWithContext(f.ctx, nil)
+	r.EnrollID = &mdm.EnrollID{ID: id, Type: mdm.Device}
+	au := &mdm.Authenticate{SerialNumber: serial, Raw: []byte(`<?xml version="1.0"?><plist version="1.0"><dict><key>OSVersion</key><string>15.0</string><key>ProductName</key><string>Mac15,6</string></dict></plist>`)}
+	au.UDID = id
+	if err := f.obs.Authenticate(r, au); err != nil {
+		panic(err)
+	}
+	tu := &mdm.TokenUpdate{Raw: []byte(`<?xml version="1.0"?><plist version="1.0"><dict><key>AwaitingConfiguration</key><true/></dict></plist>`)}
+	tu.UDID = id
+	if err := f.obs.TokenUpdate(r, tu); err != nil {
+		panic(err)
+	}
+}
+
+func (f *fixture) deviceConfigured() []sent {
+	var out []sent
+	for _, s := range f.enq.take() {
+		if s.requestType() == "DeviceConfigured" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// A device Apple assigned to this server is known before it enrolls, is supervised and carries its DEP name when it does, and is held in Setup Assistant until what it must have is done.
+func TestAutomatedDeviceEnrollment(t *testing.T) {
+	f := newFixture(t)
+	f.eng.OnDEPDevice = nil
+	heard := 0
+	f.eng.OnDEPDevice = func(_ context.Context, d DEPDevice, removed bool) { heard++ }
+	f.eng.DEPDeviceEvent(f.ctx, DEPDevice{Serial: "C02ADE", Model: "MacBook Air", DEPName: "acme-abm", Supervised: true}, false)
+	if heard != 1 {
+		t.Errorf("the assignment was heard %d times", heard)
+	}
+	if rec, _ := f.store.DEPRecord(f.ctx, "C02ADE"); rec == nil || rec.DEPName != "acme-abm" {
+		t.Fatalf("the assigned device is not remembered: %+v", rec)
+	}
+
+	// Enrolling: the device learns its DEP name and that it is supervised, from its serial number alone.
+	f.awaitingMac("ade-mac", "C02ADE")
+	d, _ := f.store.GetDevice(f.ctx, "ade-mac")
+	if d.DEPName != "acme-abm" || d.Supervised == nil || !*d.Supervised || !d.Awaiting {
+		t.Fatalf("the enrolled device: %+v", d)
+	}
+	// A Mac that is not assigned is neither.
+	f.awaitingMac("byo-mac", "C02OTHER")
+	if o, _ := f.store.GetDevice(f.ctx, "byo-mac"); o.DEPName != "" || (o.Supervised != nil && *o.Supervised) {
+		t.Errorf("an unassigned Mac: %+v", o)
+	}
+	// the DEP name is a field smart groups can use
+	env, _ := f.eng.Env(f.ctx)
+	x, _ := Rule{Field: "dep_name", Op: "eq", Value: "acme-abm"}.Expand(env)
+	if ds, _ := f.store.QueryDevices(f.ctx, x, "", 10); len(ds) != 1 || ds[0].ID != "ade-mac" {
+		t.Errorf("rule on the DEP name: %v", ds)
+	}
+
+	// A Setup item holds the device in Setup Assistant until it is applied.
+	f.save(Blueprint{ID: "setup", Enabled: true, Scope: Rule{Field: "dep_name", Op: "eq", Value: "acme-abm"}, Items: []Item{
+		{ID: "wifi", Kind: "profile", Setup: true, Delivery: "profile", Payload: wifiProfile("setup-net")},
+	}})
+	f.reconcile()
+	var install *sent
+	for _, s := range f.enq.take() {
+		s := s
+		if s.requestType() == "InstallProfile" {
+			install = &s
+		}
+	}
+	if install == nil {
+		t.Fatal("the Setup profile was not sent")
+	}
+	f.now = f.now.Add(time.Minute)
+	f.eng.Store.Touch(f.ctx, Rule{})
+	f.reconcile()
+	if got := f.deviceConfigured(); len(got) != 0 {
+		t.Fatal("the device was released before its Setup profile was installed")
+	}
+	f.answer("ade-mac", install.uuid(), "Acknowledged") // applied; the device is looked at at once
+	f.reconcile()
+	got := f.deviceConfigured()
+	if len(got) != 1 || got[0].ids[0] != "ade-mac" {
+		t.Fatalf("the device was not released once its Setup profile was applied: %v", got)
+	}
+	if d, _ := f.store.GetDevice(f.ctx, "ade-mac"); d.Awaiting {
+		t.Error("a released device is still awaiting")
+	}
+	f.eng.Store.Touch(f.ctx, Rule{})
+	f.reconcile()
+	if len(f.deviceConfigured()) != 0 {
+		t.Error("DeviceConfigured was sent twice")
+	}
+	// A device with nothing to wait for is released at once.
+	if got := f.deviceConfigured(); len(got) != 0 {
+		t.Fatal(got)
+	}
+	f.reconcile()
+	if len(f.deviceConfigured()) == 0 {
+		// byo-mac is not in the Setup blueprint's scope
+		t.Log("byo-mac released (no Setup items)")
+	}
+
+	// A device whose Setup item never completes is released when the wait runs out.
+	f.awaitingMac("stuck-mac", "C02ADE")
+	f.store.SetDeviceFields(f.ctx, "stuck-mac", bson.D{{Key: "awaiting", Value: true}, {Key: "awaiting_since", Value: f.now}}, true)
+	f.reconcile()
+	f.enq.take()
+	f.now = f.now.Add(31 * time.Minute)
+	f.eng.Store.Touch(f.ctx, Rule{})
+	f.reconcile()
+	released := false
+	for _, s := range f.deviceConfigured() {
+		released = released || s.ids[0] == "stuck-mac"
+	}
+	if !released {
+		t.Error("a device stuck in Setup Assistant was never released")
+	}
+
+	// Apple takes a device back.
+	f.eng.DEPDeviceEvent(f.ctx, DEPDevice{Serial: "C02ADE"}, true)
+	if rec, _ := f.store.DEPRecord(f.ctx, "C02ADE"); rec != nil {
+		t.Error("a device Apple took back is still recorded")
 	}
 }

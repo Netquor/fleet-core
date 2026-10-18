@@ -23,7 +23,7 @@ require (
 	filippo.io/edwards25519 v1.1.0 // indirect
 	github.com/go-logfmt/logfmt v0.5.1 // indirect
 	github.com/go-stack/stack v1.6.0 // indirect
-	github.com/golang-jwt/jwt/v5 v5.0.0 // indirect
+	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 	github.com/gomodule/oauth1 v0.2.0 // indirect
 	github.com/google/btree v1.0.0 // indirect
 	github.com/gorilla/mux v1.7.3 // indirect

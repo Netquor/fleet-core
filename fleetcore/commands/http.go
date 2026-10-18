@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,6 +27,11 @@ type Result struct {
 	QueuedAt time.Time      `json:"queued_at"`
 	ResultAt *time.Time     `json:"result_at,omitempty"`
 	Result   map[string]any `json:"result,omitempty"`
+}
+
+// Lister pages through the command history. The MongoDB storage implements it (through an adapter in the server).
+type Lister interface {
+	ListCommands(ctx context.Context, requestType string, contents bool, after string, limit int) (rows []map[string]any, next string, err error)
 }
 
 // Request is the body of POST {prefix}/.
@@ -51,8 +57,9 @@ type Request struct {
 //	GET  {prefix}/types            the commands
 //	GET  {prefix}/types/{Type}     one command's schema
 //	POST {prefix}/                 validate, build and enqueue (with a push) a command
+//	GET  {prefix}?type=&include=contents&cursor=&limit=   the command history, newest first, in pages
 //	GET  {prefix}/{uuid}           per device: queued, or what the device answered, as JSON
-func Handler(prefix string, cat *Catalog, enq storage.CommandEnqueuer, pusher push.Pusher, results ResultReader, logger log.Logger) (http.Handler, error) {
+func Handler(prefix string, cat *Catalog, enq storage.CommandEnqueuer, pusher push.Pusher, results ResultReader, lister Lister, logger log.Logger) (http.Handler, error) {
 	pe, err := nanoapi.NewPushEnqueuer(enq, pusher, nanoapi.WithLogger(logger))
 	if err != nil {
 		return nil, err
@@ -128,6 +135,19 @@ func Handler(prefix string, cat *Catalog, enq storage.CommandEnqueuer, pusher pu
 				code = 207
 			}
 			writeJSON(w, code, map[string]any{"command_uuid": uuid, "request_type": req.RequestType, "result": res})
+		case r.Method == http.MethodGet && (r.URL.Path == prefix+"/" || r.URL.Path == prefix):
+			if lister == nil {
+				fail(w, 501, "this storage cannot list commands")
+				return
+			}
+			q := r.URL.Query()
+			limit, _ := strconv.Atoi(q.Get("limit"))
+			rows, next, err := lister.ListCommands(r.Context(), q.Get("type"), q.Get("include") == "contents", q.Get("cursor"), limit)
+			if err != nil {
+				fail(w, 400, err.Error())
+				return
+			}
+			writeJSON(w, 200, map[string]any{"commands": rows, "next": next})
 		case r.Method == http.MethodGet:
 			if results == nil {
 				fail(w, 501, "this storage cannot report results")

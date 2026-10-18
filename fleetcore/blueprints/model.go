@@ -10,27 +10,36 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/micromdm/nanomdm/fleetcore/applicability"
 	"strings"
 	"time"
 )
 
 // Device is the inventory record the engine decides with. It is created and kept current by check-ins.
 type Device struct {
-	ID         string    `bson:"id" json:"id"` // the enrollment ID
-	UDID       string    `bson:"udid,omitempty" json:"udid,omitempty"`
-	Serial     string    `bson:"serial,omitempty" json:"serial,omitempty"`
-	Name       string    `bson:"name,omitempty" json:"name,omitempty"`
-	Platform   string    `bson:"platform,omitempty" json:"platform,omitempty"` // macOS, iOS, iPadOS, tvOS, visionOS, watchOS
-	Model      string    `bson:"model,omitempty" json:"model,omitempty"`
-	OSVersion  string    `bson:"os_version,omitempty" json:"os_version,omitempty"`
-	OSNum      int64     `bson:"os_num,omitempty" json:"-"` // major*1e6 + minor*1e3 + patch, for comparisons
-	DEPName    string    `bson:"dep_name,omitempty" json:"dep_name,omitempty"`
-	EnrollType string    `bson:"enroll_type,omitempty" json:"enroll_type,omitempty"`
-	Tags       []string  `bson:"tags,omitempty" json:"tags,omitempty"`
-	Groups     []string  `bson:"groups,omitempty" json:"groups,omitempty"` // static group membership
-	EnrolledAt time.Time `bson:"enrolled_at,omitempty" json:"enrolled_at,omitempty"`
-	LastSeen   time.Time `bson:"last_seen,omitempty" json:"last_seen,omitempty"`
-	Active     bool      `bson:"active" json:"active"`
+	ID     string `bson:"id" json:"id"` // the enrollment ID
+	UDID   string `bson:"udid,omitempty" json:"udid,omitempty"`
+	Serial string `bson:"serial,omitempty" json:"serial,omitempty"`
+	Name   string `bson:"name,omitempty" json:"name,omitempty"`
+	// ManagedAppleID is the person a User Enrollment (BYOD) device belongs to.
+	ManagedAppleID string `bson:"managed_apple_id,omitempty" json:"managed_apple_id,omitempty"`
+	Platform       string `bson:"platform,omitempty" json:"platform,omitempty"` // macOS, iOS, iPadOS, tvOS, visionOS, watchOS
+	Model          string `bson:"model,omitempty" json:"model,omitempty"`
+	OSVersion      string `bson:"os_version,omitempty" json:"os_version,omitempty"`
+	OSNum          int64  `bson:"os_num,omitempty" json:"-"` // major*1e6 + minor*1e3 + patch, for comparisons
+	DEPName        string `bson:"dep_name,omitempty" json:"dep_name,omitempty"`
+	EnrollType     string `bson:"enroll_type,omitempty" json:"enroll_type,omitempty"`
+	// Awaiting is set while the device sits in Setup Assistant waiting for the server to release it (ADE with await configuration); AwaitingSince says since when.
+	Awaiting      bool      `bson:"awaiting,omitempty" json:"awaiting,omitempty"`
+	AwaitingSince time.Time `bson:"awaiting_since,omitempty" json:"awaiting_since,omitempty"`
+	Tags          []string  `bson:"tags,omitempty" json:"tags,omitempty"`
+	Groups        []string  `bson:"groups,omitempty" json:"groups,omitempty"` // static group membership
+	EnrolledAt    time.Time `bson:"enrolled_at,omitempty" json:"enrolled_at,omitempty"`
+	LastSeen      time.Time `bson:"last_seen,omitempty" json:"last_seen,omitempty"`
+	Active        bool      `bson:"active" json:"active"`
+	// LostMode and Location are kept by the Lost Mode workflow.
+	LostMode *LostMode `bson:"lost_mode,omitempty" json:"lost_mode,omitempty"`
+	Location *Location `bson:"location,omitempty" json:"location,omitempty"`
 	// Users are the device's user-channel enrollment IDs (macOS users, Shared iPad), for user-scoped declarations.
 	Users []string `bson:"users,omitempty" json:"users,omitempty"`
 	// Supervised is learned from the device (IsSupervised); nil until known. Many declarations need a supervised device.
@@ -61,6 +70,9 @@ type Item struct {
 	// Profile: the configuration profile (a .mobileconfig, base64 in JSON). Identifier is its PayloadIdentifier, found from the profile if left empty.
 	Identifier string `bson:"identifier,omitempty" json:"identifier,omitempty"`
 	Payload    []byte `bson:"payload,omitempty" json:"payload,omitempty"`
+	// Setup marks an item a device in Setup Assistant (ADE with await configuration) must have before it is released to the person: the server sends DeviceConfigured when every Setup
+	// item has been applied, found not applicable, or has failed for good, or after the wait runs out.
+	Setup bool `bson:"setup,omitempty" json:"setup,omitempty"`
 	// Delivery of a profile: "auto" (the default) sends it as a legacy-profile declaration when the device takes declarative management, and as an MDM profile otherwise;
 	// "declarative" insists on declarative management (a device that cannot is told so); "profile" always uses the MDM InstallProfile command.
 	Delivery string `bson:"delivery,omitempty" json:"delivery,omitempty"`
@@ -108,6 +120,9 @@ func (i Item) Hash() string {
 		h.Write(b)
 	}
 	h.Write([]byte(i.Delivery))
+	if i.Setup {
+		h.Write([]byte("setup"))
+	}
 	h.Write(i.AssetData)
 	h.Write([]byte(i.ContentType + "\x00" + i.Predicate + "\x00" + i.Scope))
 	if i.Kind == "declaration" || i.Kind == "os_update" || i.Kind == "asset" {
@@ -190,4 +205,33 @@ func (d *Device) EnrollKind() string {
 		return "supervised"
 	}
 	return "device"
+}
+
+// UserEnrollment reports whether the device is enrolled with User Enrollment (BYOD): the organization manages only its own data, and Apple forbids many commands and settings there.
+func (d *Device) UserEnrollment() bool { return strings.Contains(d.EnrollType, "User Enrollment") }
+
+func (d *Device) profileOptions() []applicability.Option {
+	if d.UserEnrollment() {
+		return []applicability.Option{applicability.ForUserEnrollment()}
+	}
+	return nil
+}
+
+// LostMode is the state of Lost Mode on a device.
+type LostMode struct {
+	Enabled   bool      `bson:"enabled" json:"enabled"`
+	Message   string    `bson:"message,omitempty" json:"message,omitempty"`
+	Phone     string    `bson:"phone,omitempty" json:"phone,omitempty"`
+	Footnote  string    `bson:"footnote,omitempty" json:"footnote,omitempty"`
+	Confirmed bool      `bson:"confirmed" json:"confirmed"` // the device acknowledged the command
+	Since     time.Time `bson:"since" json:"since"`
+}
+
+// Location is where a device last said it was.
+type Location struct {
+	Latitude           float64   `bson:"latitude" json:"latitude"`
+	Longitude          float64   `bson:"longitude" json:"longitude"`
+	Altitude           float64   `bson:"altitude,omitempty" json:"altitude,omitempty"`
+	HorizontalAccuracy float64   `bson:"horizontal_accuracy,omitempty" json:"horizontal_accuracy,omitempty"`
+	At                 time.Time `bson:"at" json:"at"`
 }

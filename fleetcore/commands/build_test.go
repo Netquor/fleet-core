@@ -134,3 +134,33 @@ func TestEveryCommandBuilds(t *testing.T) {
 		}
 	}
 }
+
+func TestUserEnrollmentForbidsWhatAppleForbids(t *testing.T) {
+	// Pick commands the schema forbids on User Enrollment for iOS and one it allows.
+	var forbidden, allowed *Command
+	for _, c := range Default().All() {
+		info, ok := c.OS["iOS"]
+		if !ok || info.Unsupported() {
+			continue
+		}
+		if info.UserEnrollment == "forbidden" && forbidden == nil {
+			forbidden = c
+		}
+		if info.UserEnrollment == "allowed" && allowed == nil && len(c.Keys) == 0 {
+			allowed = c
+		}
+	}
+	if forbidden == nil || allowed == nil {
+		t.Skip("the schema in use has no such commands")
+	}
+	if _, _, ps := Build(forbidden, map[string]any{}, Options{Platform: "iOS", UserEnrollment: true}); len(ps) == 0 || !strings.Contains(ps[0].Message, "User Enrollment") {
+		t.Errorf("%s was not refused on User Enrollment: %v", forbidden.RequestType, ps)
+	}
+	if _, _, ps := Build(forbidden, map[string]any{}, Options{Platform: "iOS"}); len(ps) != 0 && strings.Contains(ps[0].Message, "User Enrollment") {
+		t.Errorf("%s was refused on a normal enrollment", forbidden.RequestType)
+	}
+	if _, _, ps := Build(allowed, map[string]any{}, Options{Platform: "iOS", UserEnrollment: true}); len(ps) != 0 {
+		t.Errorf("%s should work on User Enrollment: %v", allowed.RequestType, ps)
+	}
+	t.Logf("forbidden: %s, allowed: %s", forbidden.RequestType, allowed.RequestType)
+}

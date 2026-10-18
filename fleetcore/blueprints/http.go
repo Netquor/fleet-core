@@ -233,6 +233,21 @@ func (a *API) Handler() http.Handler {
 		writeJSON(w, 200, map[string]any{"blueprint": b.ID, "revision": b.Revision, "rollout_at": b.RolloutAt, "states": counts})
 	})
 
+	// ---- devices Apple assigned to this server, known before they enroll ----
+	mux.HandleFunc("GET /dep-devices", func(w http.ResponseWriter, r *http.Request) {
+		n, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		rows, err := st.ListDEP(r.Context(), r.URL.Query().Get("cursor"), n)
+		if err != nil {
+			fail(w, 500, err.Error())
+			return
+		}
+		next := ""
+		if len(rows) > 0 && (n <= 0 && len(rows) == 100 || len(rows) == n) {
+			next = rows[len(rows)-1].Serial
+		}
+		writeJSON(w, 200, map[string]any{"devices": rows, "next": next})
+	})
+
 	// ---- groups ----
 	mux.HandleFunc("GET /groups", func(w http.ResponseWriter, r *http.Request) {
 		gs, err := st.ListGroups(r.Context())
@@ -268,6 +283,44 @@ func (a *API) Handler() http.Handler {
 	})
 
 	// ---- devices ----
+	// GET /devices?platform=&model=&serial=&name=&dep_name=&enroll_type=&user=&tag=&group=&os_version_lt=&cursor=&limit=  (every filter given must match)
+	mux.HandleFunc("GET /devices", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		var all []Rule
+		for _, f := range []string{"platform", "model", "serial", "name", "dep_name", "enroll_type", "user", "tag", "group"} {
+			if v := q.Get(f); v != "" {
+				all = append(all, Rule{Field: f, Op: "eq", Value: v})
+			}
+		}
+		if v := q.Get("os_version_lt"); v != "" {
+			all = append(all, Rule{Field: "os_version", Op: "lt", Value: v})
+		}
+		rule := Rule{All: all}
+		if err := rule.Validate(); err != nil {
+			fail(w, 422, err.Error())
+			return
+		}
+		env, _ := e.Env(r.Context())
+		x, err := rule.Expand(env)
+		if err != nil {
+			fail(w, 422, err.Error())
+			return
+		}
+		n, _ := strconv.Atoi(q.Get("limit"))
+		if n <= 0 || n > 1000 {
+			n = 100
+		}
+		ds, err := st.QueryDevices(r.Context(), x, q.Get("cursor"), n)
+		if err != nil {
+			fail(w, 500, err.Error())
+			return
+		}
+		next := ""
+		if len(ds) == n {
+			next = ds[len(ds)-1].ID
+		}
+		writeJSON(w, 200, map[string]any{"devices": ds, "next": next})
+	})
 	mux.HandleFunc("POST /devices/query", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Rule  Rule   `json:"rule"`

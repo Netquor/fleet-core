@@ -2,7 +2,15 @@ package dep
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/micromdm/nanodep/client"
+	nanolog "github.com/micromdm/nanolib/log"
+	"github.com/micromdm/nanomdm/mdm"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -115,3 +123,64 @@ func TestSyncAgainstFakeDEP(t *testing.T) {
 }
 
 func toJSON(v any) string { b, _ := json.Marshal(v); return string(b) }
+
+// A device signing in with a Managed Apple Account asks the MDM server for a token: a JWT signed with the DEP name's key, naming the server as Apple Business Manager knows it.
+func TestManagedAppleAccountToken(t *testing.T) {
+	uri := os.Getenv("NANOMDM_MONGODB_STORAGE_TEST_URI")
+	if uri == "" {
+		t.Skip("NANOMDM_MONGODB_STORAGE_TEST_URI not set")
+	}
+	ctx := context.Background()
+	mc, err := mongo.Connect(options.Client().ApplyURI(uri))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mc.Disconnect(ctx)
+	db := mc.Database("fleetcore_maid_test")
+	db.Drop(ctx)
+	defer db.Drop(ctx)
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/session":
+			io.WriteString(w, `{"auth_session_token":"tok"}`)
+		case "/account":
+			io.WriteString(w, `{"server_uuid":"11111111-2222-3333-4444-555555555555","server_name":"fleetcore"}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer fake.Close()
+	store, _ := New(ctx, db, "", "p")
+	svc, _ := NewService(ctx, db, store, "", nanolog.NopLogger)
+	if err := store.StoreConfig(ctx, "org", &client.Config{BaseURL: fake.URL}); err != nil {
+		t.Fatal(err)
+	}
+	exp := time.Now().Add(time.Hour)
+	if err := store.StoreAuthTokens(ctx, "org", &client.OAuth1Tokens{ConsumerKey: "a", ConsumerSecret: "b", AccessToken: "c", AccessSecret: "d", AccessTokenExpiry: exp}); err != nil {
+		t.Fatal(err)
+	}
+	key, _ := rsa.GenerateKey(rand.Reader, 2048)
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
+	if err := store.StoreTokenPKI(ctx, "org", []byte("CERT"), keyPEM); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpstageTokenPKI(ctx, "org"); err != nil {
+		t.Fatal(err)
+	}
+	req := mdm.NewRequestWithContext(ctx, nil)
+	req.EnrollID = &mdm.EnrollID{ID: "e1"}
+	// no name given, one DEP name stored: it signs
+	resp, err := svc.GetToken("").GetToken(req, &mdm.GetToken{TokenServiceType: "com.apple.maid"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok, err := jwt.Parse(string(resp.TokenData), func(*jwt.Token) (any, error) { return &key.PublicKey, nil }, jwt.WithValidMethods([]string{"RS256"}))
+	if err != nil || !tok.Valid {
+		t.Fatalf("the token does not verify with the DEP key: %v", err)
+	}
+	claims := tok.Claims.(jwt.MapClaims)
+	if claims["iss"] != "11111111-2222-3333-4444-555555555555" || claims["jti"] == "" || claims["service_type"] == nil {
+		t.Errorf("claims: %v", claims)
+	}
+}

@@ -484,6 +484,50 @@ func TestEnrollEndToEnd(t *testing.T) {
 	if code, b := api("GET", "/v1/ddm/support", ""); code != 200 || !strings.Contains(b, "software_update") {
 		t.Errorf("support: %d %.200s", code, b)
 	}
+	// 4g. Enrollments and the queue, in pages.
+	code, b = api("GET", "/v1/enrollments?limit=1", "")
+	var enr struct {
+		Enrollments []struct{ ID, Type string }
+		Next        string
+	}
+	_ = json.Unmarshal([]byte(b), &enr)
+	if code != 200 || len(enr.Enrollments) != 1 || enr.Enrollments[0].ID != udid || enr.Enrollments[0].Type != "Device" {
+		t.Errorf("enrollments: %d %s", code, b)
+	}
+	if code, b := api("GET", "/v1/enrollments/"+udid+"/queue?status=acknowledged&limit=2", ""); code != 200 || !strings.Contains(b, `"status":"Acknowledged"`) || !strings.Contains(b, `"request_type"`) {
+		t.Errorf("queue: %d %.300s", code, b)
+	}
+	var q1 struct {
+		Queue []struct {
+			CommandUUID string `json:"command_uuid"`
+		}
+		Next string
+	}
+	_, b = api("GET", "/v1/queue?id="+udid+"&limit=2", "")
+	_ = json.Unmarshal([]byte(b), &q1)
+	if len(q1.Queue) != 2 || q1.Next == "" {
+		t.Fatalf("first page of the queue: %s", b)
+	}
+	var q2 struct {
+		Queue []struct {
+			CommandUUID string `json:"command_uuid"`
+		}
+	}
+	_, b = api("GET", "/v1/queue?id="+udid+"&limit=2&cursor="+q1.Next, "")
+	_ = json.Unmarshal([]byte(b), &q2)
+	if len(q2.Queue) == 0 || q2.Queue[0].CommandUUID == q1.Queue[0].CommandUUID || q2.Queue[0].CommandUUID == q1.Queue[1].CommandUUID {
+		t.Errorf("the second page repeats the first: first %v second %s", q1.Queue, b)
+	}
+	if code, b := api("GET", "/v1/commands?type=DeviceInformation&limit=5", ""); code != 200 || !strings.Contains(b, `"request_type":"DeviceInformation"`) {
+		t.Errorf("command history: %d %.200s", code, b)
+	}
+	if code, b := api("GET", "/v1/devices?platform=macOS&limit=5", ""); code != 200 || !strings.Contains(b, udid) {
+		t.Errorf("device list: %d %.200s", code, b)
+	}
+	if code, _ := api("GET", "/v1/queue?cursor=garbage", ""); code != 400 {
+		t.Errorf("a bad cursor got %d", code)
+	}
+
 	if code, b := api("GET", "/v1/ddm/coverage", ""); code != 200 || !strings.Contains(b, "com.apple.wifi.managed") || !strings.Contains(b, "applications_by_delivery") {
 		t.Errorf("coverage: %d %.200s", code, b)
 	}

@@ -208,12 +208,24 @@ type Result struct {
 	LeftOut       []LeftOut `json:"left_out,omitempty"`
 }
 
+type applyOptions struct{ userEnrollment bool }
+
+// Option changes how a profile is adapted.
+type Option func(*applyOptions)
+
+// ForUserEnrollment also leaves out the payloads and keys Apple's schema forbids on a device enrolled with User Enrollment (BYOD).
+func ForUserEnrollment() Option { return func(o *applyOptions) { o.userEnrollment = true } }
+
 // baseKeys are the keys every payload has; they are never judged.
 var baseKeys = map[string]bool{"PayloadType": true, "PayloadVersion": true, "PayloadIdentifier": true, "PayloadUUID": true, "PayloadDisplayName": true, "PayloadDescription": true, "PayloadOrganization": true, "PayloadEnabled": true}
 
 // Apply adapts a .mobileconfig (XML plist) to a platform (macOS, iOS, iPadOS, tvOS, visionOS, watchOS) and, if known, its OS version (payloads and keys Apple removed by then are left out).
 // An empty platform returns the profile unchanged.
-func (r *Registry) Apply(profile []byte, platform, osVersion string) (Result, error) {
+func (r *Registry) Apply(profile []byte, platform, osVersion string, opts ...Option) (Result, error) {
+	var ao applyOptions
+	for _, f := range opts {
+		f(&ao)
+	}
 	if platform == "" {
 		return Result{Profile: profile}, nil
 	}
@@ -244,11 +256,15 @@ func (r *Registry) Apply(profile []byte, platform, osVersion string) (Result, er
 			}
 		} else if def, ok := set.Profile(typ); ok {
 			// 2. Apple's schema for the payload type
+			if info, listed := def.OS[os]; listed && ao.userEnrollment && info.UserEnrollment == "forbidden" {
+				res.LeftOut = append(res.LeftOut, LeftOut{Payload: typ, Reason: typ + " is not allowed on User Enrollment (BYOD)"})
+				continue
+			}
 			if info, listed := def.OS[os]; listed && info.UnsupportedOn(osVersion) {
 				res.LeftOut = append(res.LeftOut, LeftOut{Payload: typ, Reason: typ + " does not exist on " + platform + " " + osVersion})
 				continue
 			}
-			res.LeftOut = append(res.LeftOut, dropKeys(p, typ, def.Keys, os, platform, osVersion)...)
+			res.LeftOut = append(res.LeftOut, dropKeys(p, typ, def.Keys, os, platform, osVersion, ao.userEnrollment)...)
 		}
 		// 3. preference domains inside a managed-preferences payload
 		if typ == "com.apple.ManagedClient.preferences" {
@@ -284,7 +300,7 @@ func (r *Registry) Apply(profile []byte, platform, osVersion string) (Result, er
 }
 
 // dropKeys removes keys the platform does not support from a payload (descending into dictionaries the schema describes).
-func dropKeys(p map[string]any, payload string, keys []schemas.Key, os, platform, osVersion string) []LeftOut {
+func dropKeys(p map[string]any, payload string, keys []schemas.Key, os, platform, osVersion string, userEnrollment bool) []LeftOut {
 	var out []LeftOut
 	byName := make(map[string]*schemas.Key, len(keys))
 	for i := range keys {
@@ -303,6 +319,11 @@ func dropKeys(p map[string]any, payload string, keys []schemas.Key, os, platform
 			full := name
 			if path != "" {
 				full = path + "." + name
+			}
+			if info, listed := k.OS[os]; listed && userEnrollment && info.UserEnrollment == "forbidden" {
+				delete(m, name)
+				out = append(out, LeftOut{Payload: payload, Key: full, Reason: name + " is not allowed on User Enrollment (BYOD)"})
+				continue
 			}
 			if info, listed := k.OS[os]; listed && info.UnsupportedOn(osVersion) {
 				delete(m, name)

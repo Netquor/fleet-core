@@ -14,7 +14,7 @@ import (
 //	{"all":[{"field":"platform","op":"eq","value":"macOS"},{"field":"os_version","op":"gte","value":"14.0"}]}
 //	{"field":"group","op":"eq","value":"Engineering"}
 //
-// Fields: platform, model, serial, name, os_version, dep_name, enroll_type, tag, group. Ops: eq, ne, in, nin, prefix, and gte/gt/lte/lt for os_version.
+// Fields: platform, model, serial, name, os_version, dep_name, enroll_type, user (the Managed Apple Account of a BYOD device), tag, group. Ops: eq, ne, in, nin, prefix, and gte/gt/lte/lt for os_version.
 // For tag and group, eq means "has" and ne "does not have".
 type Rule struct {
 	All   []Rule `bson:"all,omitempty" json:"all,omitempty"`
@@ -36,7 +36,7 @@ type Env struct {
 }
 
 var scalarFields = map[string]string{
-	"platform": "platform", "model": "model", "serial": "serial", "name": "name", "dep_name": "dep_name", "enroll_type": "enroll_type",
+	"platform": "platform", "model": "model", "serial": "serial", "name": "name", "dep_name": "dep_name", "enroll_type": "enroll_type", "user": "managed_apple_id",
 }
 
 func versionNum(v string) (int64, bool) { return schemas.VersionNum(v) }
@@ -285,6 +285,8 @@ func (r Rule) Match(d *Device) bool {
 		have = d.DEPName
 	case "enroll_type":
 		have = d.EnrollType
+	case "user":
+		have = d.ManagedAppleID
 	}
 	switch r.Op {
 	case "eq":

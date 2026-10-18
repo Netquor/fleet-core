@@ -127,3 +127,26 @@ func TestInvalidProfile(t *testing.T) {
 		t.Errorf("no platform must pass the profile through: %v", err)
 	}
 }
+
+func TestUserEnrollmentLeavesOutForbiddenPayloads(t *testing.T) {
+	r, _ := NewRegistry(context.Background(), nil, "")
+	var forbidden string
+	for _, p := range schemas.Current().Profiles {
+		if i, ok := p.OS["iOS"]; ok && !i.Unsupported() && i.UserEnrollment == "forbidden" {
+			forbidden = p.PayloadType
+			break
+		}
+	}
+	if forbidden == "" {
+		t.Skip("no payload forbidden on User Enrollment in this schema")
+	}
+	in := profile(payload(forbidden, "") + payload("com.apple.wifi.managed", `<key>SSID_STR</key><string>x</string>`))
+	res, _ := r.Apply(in, "iOS", "18.2")
+	if !strings.Contains(string(res.Profile), forbidden) && len(res.LeftOut) == 0 {
+		t.Fatalf("a normal enrollment lost %s", forbidden)
+	}
+	res, _ = r.Apply(in, "iOS", "18.2", ForUserEnrollment())
+	if strings.Contains(string(res.Profile), forbidden) || len(res.LeftOut) == 0 {
+		t.Errorf("%s stayed on User Enrollment: %+v", forbidden, res.LeftOut)
+	}
+}

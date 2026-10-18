@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/micromdm/nanolib/log/stdlogfmt"
+	"github.com/micromdm/nanomdm/fleetcore/byod"
 	"github.com/micromdm/nanomdm/fleetcore/provision"
 	"github.com/micromdm/nanomdm/fleetcore/seal"
 	"github.com/micromdm/nanomdm/fleetcore/server"
@@ -46,6 +47,12 @@ func main() {
 		uri        = flag.String("mongo", env("FLEETCORE_MONGO_URI", "mongodb://127.0.0.1:27017/?replicaSet=rs0"), "MongoDB URI")
 		mongoCert  = flag.String("mongo-cert", env("FLEETCORE_MONGO_CERT", ""), "client certificate and key (PEM) this server authenticates to MongoDB with (MONGODB-X509, no password)")
 		adminCA    = flag.String("admin-ca", env("FLEETCORE_ADMIN_CA", ""), "CA certificate (PEM) whose client certificates may use the management API (mutual TLS); needs TLS terminated by this server")
+		byodIssuer = flag.String("byod-issuer", env("FLEETCORE_BYOD_ISSUER", ""), "OpenID Connect issuer whose tokens may start a User Enrollment (BYOD); turns account-driven enrollment on")
+		byodJWKS   = flag.String("byod-jwks", env("FLEETCORE_BYOD_JWKS", ""), "URL of the issuer's signing keys (JWKS)")
+		byodAud    = flag.String("byod-audience", env("FLEETCORE_BYOD_AUDIENCE", ""), "audience the tokens must carry")
+		byodClaim  = flag.String("byod-claim", env("FLEETCORE_BYOD_CLAIM", "email"), "token claim that holds the person's Managed Apple Account")
+		byodLogin  = flag.String("byod-login-url", env("FLEETCORE_BYOD_LOGIN_URL", ""), "identity provider sign-in page for devices that have no token yet")
+		maidDEP    = flag.String("maid-dep", env("FLEETCORE_MAID_DEP", ""), "DEP name whose key signs Managed Apple Account tokens (default: the only one)")
 		mongoCA    = flag.String("mongo-ca", env("FLEETCORE_MONGO_CA", ""), "CA certificate that signed the MongoDB servers' certificates")
 		dbName     = flag.String("db", env("FLEETCORE_DB", "fleetcore"), "database name")
 		tenant     = flag.String("tenant", env("FLEETCORE_TENANT", ""), "tenant id (shared-collections mode); empty: the database belongs to one tenant")
@@ -121,9 +128,16 @@ func main() {
 			fatal(logger, errors.New("no certificate in the -admin-ca file"))
 		}
 	}
+	var byodCfg *server.BYODConfig
+	if *byodIssuer != "" {
+		if *byodJWKS == "" || *byodAud == "" {
+			fatal(logger, errors.New("-byod-issuer needs -byod-jwks and -byod-audience"))
+		}
+		byodCfg = &server.BYODConfig{Auth: &byod.OIDC{Issuer: *byodIssuer, JWKSURL: *byodJWKS, Audience: *byodAud, Claim: *byodClaim}, LoginURL: *byodLogin}
+	}
 	srv, err := server.New(ctx, server.Config{
 		BaseURL: *base, Organization: *org, Topic: *topic, Storage: store, PKIDB: mc.Database(*dbName), PKITenant: *tenant,
-		CAPass: *caPass, CertSource: server.CertSource(*source), CertHeader: *header, APIKey: *apiKey, Logger: logger, Debug: *debug, Version: version, NoFeeds: *noFeeds, Sealer: sealer, AdminCA: adminPool,
+		CAPass: *caPass, CertSource: server.CertSource(*source), CertHeader: *header, APIKey: *apiKey, Logger: logger, Debug: *debug, Version: version, NoFeeds: *noFeeds, Sealer: sealer, AdminCA: adminPool, BYOD: byodCfg, MAIDDEPName: *maidDEP,
 	})
 	if err != nil {
 		fatal(logger, err)

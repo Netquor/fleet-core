@@ -15,6 +15,7 @@ import (
 )
 
 const (
+	cDEP        = "bp_dep"
 	cDevices    = "bp_devices"
 	cGroups     = "bp_groups"
 	cBlueprints = "bp_blueprints"
@@ -61,6 +62,7 @@ func NewStore(ctx context.Context, db *mongo.Database, tenant string) (*Store, e
 			{Keys: lead(bson.D{{Key: "groups", Value: 1}})},
 			{Keys: lead(bson.D{{Key: "serial", Value: 1}})},
 		},
+		cDEP:        {{Keys: lead(bson.D{{Key: "serial", Value: 1}})}},
 		cGroups:     {{Keys: lead(bson.D{{Key: "name", Value: 1}}), Options: options.Index().SetUnique(true)}},
 		cBlueprints: {{Keys: lead(bson.D{{Key: "name", Value: 1}}), Options: options.Index().SetUnique(true)}},
 		cRevisions:  {{Keys: lead(bson.D{{Key: "blueprint", Value: 1}, {Key: "revision", Value: -1}}), Options: options.Index().SetUnique(true)}},
@@ -109,19 +111,36 @@ func (s *Store) stamp(d bson.D) bson.D {
 
 // DeviceUpdate is what a check-in learns about a device; empty fields leave what is known.
 type DeviceUpdate struct {
-	ID, UDID, Serial, Name, Platform, Model, OSVersion, EnrollType string
+	ID, UDID, Serial, Name, Platform, Model, OSVersion, EnrollType, ManagedAppleID string
+	// Awaiting is set from a TokenUpdate that says the device is waiting in Setup Assistant (nil: the message did not say).
+	Awaiting *bool
 }
 
 // UpsertDevice records a device seen at check-in, marks it active and due for reconciliation now.
 func (s *Store) UpsertDevice(ctx context.Context, u DeviceUpdate, now time.Time) error {
 	set := bson.D{{Key: "id", Value: u.ID}, {Key: "active", Value: true}, {Key: "last_seen", Value: now}, {Key: "reconcile_at", Value: now}}
-	for k, v := range map[string]string{"udid": u.UDID, "serial": u.Serial, "name": u.Name, "platform": u.Platform, "model": u.Model, "os_version": u.OSVersion, "enroll_type": u.EnrollType} {
+	for k, v := range map[string]string{"udid": u.UDID, "serial": u.Serial, "name": u.Name, "platform": u.Platform, "model": u.Model, "os_version": u.OSVersion, "enroll_type": u.EnrollType, "managed_apple_id": u.ManagedAppleID} {
 		if v != "" {
 			set = append(set, bson.E{Key: k, Value: v})
 		}
 	}
 	if n, ok := versionNum(u.OSVersion); ok {
 		set = append(set, bson.E{Key: "os_num", Value: n})
+	}
+	if u.Awaiting != nil {
+		set = append(set, bson.E{Key: "awaiting", Value: *u.Awaiting})
+		if *u.Awaiting {
+			set = append(set, bson.E{Key: "awaiting_since", Value: now})
+		}
+	}
+	// A device Apple assigned to this server is known by its serial number before and after it enrolls: its DEP name, and that it is supervised.
+	if u.Serial != "" {
+		if rec, err := s.DEPRecord(ctx, u.Serial); err == nil && rec != nil {
+			set = append(set, bson.E{Key: "dep_name", Value: rec.DEPName})
+			if rec.Supervised {
+				set = append(set, bson.E{Key: "supervised", Value: true})
+			}
+		}
 	}
 	_, err := s.db.Collection(cDevices).UpdateOne(ctx, bson.D{{Key: "_id", Value: s.key(u.ID)}},
 		bson.D{{Key: "$set", Value: s.stamp(set)}, {Key: "$setOnInsert", Value: bson.D{{Key: "enrolled_at", Value: now}}}},
@@ -683,4 +702,51 @@ func (s *Store) sealRevision(b Blueprint) (string, error) {
 		return "", err
 	}
 	return seal.Put(s.Sealer, "blueprint.revision", raw)
+}
+
+// DEPDevice is a device Apple assigned to this server, known before it enrolls.
+type DEPDevice struct {
+	Serial     string    `bson:"serial" json:"serial"`
+	Model      string    `bson:"model,omitempty" json:"model,omitempty"`
+	OS         string    `bson:"os,omitempty" json:"os,omitempty"`
+	DEPName    string    `bson:"dep_name" json:"dep_name"`
+	Supervised bool      `bson:"supervised" json:"supervised"` // the DEP profile makes it supervised
+	AssignedAt time.Time `bson:"assigned_at,omitempty" json:"assigned_at,omitempty"`
+	UpdatedAt  time.Time `bson:"updated_at" json:"updated_at"`
+}
+
+// RecordDEP remembers a device Apple assigned to this server.
+func (s *Store) RecordDEP(ctx context.Context, d DEPDevice) error {
+	d.UpdatedAt = s.now()
+	_, err := s.db.Collection(cDEP).ReplaceOne(ctx, bson.D{{Key: "_id", Value: s.key(d.Serial)}}, s.stampDoc(d), options.Replace().SetUpsert(true))
+	return err
+}
+
+// ForgetDEP removes a device Apple took back.
+func (s *Store) ForgetDEP(ctx context.Context, serial string) error {
+	_, err := s.db.Collection(cDEP).DeleteOne(ctx, bson.D{{Key: "_id", Value: s.key(serial)}})
+	return err
+}
+
+// DEPRecord returns what is known of an assigned device; nil if Apple has not assigned it.
+func (s *Store) DEPRecord(ctx context.Context, serial string) (*DEPDevice, error) {
+	var d DEPDevice
+	err := s.db.Collection(cDEP).FindOne(ctx, bson.D{{Key: "_id", Value: s.key(serial)}}).Decode(&d)
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		return nil, nil
+	}
+	return &d, err
+}
+
+// ListDEP pages through the devices Apple assigned, by serial number.
+func (s *Store) ListDEP(ctx context.Context, after string, limit int) ([]DEPDevice, error) {
+	if limit <= 0 || limit > 1000 {
+		limit = 100
+	}
+	cur, err := s.db.Collection(cDEP).Find(ctx, s.scope(bson.D{{Key: "serial", Value: bson.D{{Key: "$gt", Value: after}}}}), options.Find().SetSort(bson.D{{Key: "serial", Value: 1}}).SetLimit(int64(limit)))
+	if err != nil {
+		return nil, err
+	}
+	var out []DEPDevice
+	return out, cur.All(ctx, &out)
 }

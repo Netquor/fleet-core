@@ -145,6 +145,21 @@ func (s *Service) device(ctx context.Context, id string) (*blueprints.Device, er
 	return s.Devices.GetDevice(ctx, id)
 }
 
+// ---- installed apps ----
+
+// RefreshApps asks the device what is installed (only what the organization manages, on a User Enrollment, which is all it may see).
+func (s *Service) RefreshApps(ctx context.Context, device, by string) (string, error) {
+	d, err := s.device(ctx, device)
+	if err != nil {
+		return "", err
+	}
+	params := map[string]any{}
+	if d.UserEnrollment() {
+		params["ManagedAppsOnly"] = true
+	}
+	return s.send(ctx, d, "apps", by, "InstalledApplicationList", params, nil, nil)
+}
+
 // ---- Lost Mode ----
 
 // LostModeRequest is what the person finding the device is told.
@@ -318,6 +333,23 @@ func (s *Service) HandleResult(ctx context.Context, device string, res *mdm.Comm
 	}
 	var err error
 	switch t.Workflow {
+	case "apps":
+		var r struct {
+			InstalledApplicationList []struct {
+				Identifier   string
+				Name         string
+				Version      string
+				ShortVersion string
+				IsManaged    bool
+			}
+		}
+		if err = plist.Unmarshal(res.Raw, &r); err == nil {
+			apps := make([]blueprints.AppInfo, 0, len(r.InstalledApplicationList))
+			for _, a := range r.InstalledApplicationList {
+				apps = append(apps, blueprints.AppInfo{Identifier: a.Identifier, Name: a.Name, Version: a.Version, ShortVersion: a.ShortVersion, Managed: a.IsManaged})
+			}
+			err = s.Devices.SetDeviceFields(ctx, device, bson.D{{Key: "apps", Value: apps}, {Key: "apps_at", Value: s.now()}}, false)
+		}
 	case "lost-mode-enable":
 		msg, _ := t.Meta["message"].(string)
 		phone, _ := t.Meta["phone"].(string)

@@ -24,6 +24,11 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
+// AppLicenser makes sure a device holds a license of an App Store app. ready: it does; pending: Apple is still doing it; err: it cannot be had.
+type AppLicenser interface {
+	EnsureLicense(ctx context.Context, token, adamID, serial, platform string) (ready, pending bool, err error)
+}
+
 // Enqueuer queues a command plist for devices and wakes them.
 type Enqueuer interface {
 	Enqueue(ctx context.Context, ids []string, commandPlist []byte) error
@@ -74,6 +79,8 @@ type Engine struct {
 	Releases *osreleases.Catalog
 	// DDM, if set, enables declarative device management items (declarations and software updates).
 	DDM *ddm.Store
+	// Apps licenses App Store apps to devices (Apps and Books). Without it app items for App Store apps are not applicable.
+	Apps AppLicenser
 	// OnDEPDevice, if set, is told of each device Apple assigns to (or takes from) this server, before it enrolls. Work that can be done in advance (licensing an app to the serial
 	// number) hangs here. removed is true when Apple took the device back.
 	OnDEPDevice func(ctx context.Context, d DEPDevice, removed bool)
@@ -372,6 +379,8 @@ func (e *Engine) Reconcile(ctx context.Context, d *Device) (time.Time, error) {
 					break
 				}
 				w.send, w.uuid = body, uuid
+			case "app":
+				e.appWant(ctx, d, &bp, it, oit, w, soonest, now)
 			case "declaration", "os_update", "asset":
 				if e.DDM == nil {
 					w.state, w.note, w.hash = StateNA, "declarative management is not enabled on this server", it.Hash()
@@ -499,6 +508,14 @@ func (e *Engine) Reconcile(ctx context.Context, d *Device) (time.Time, error) {
 		sameHash := a != nil && a.Hash == w.hash
 		record := Application{Device: d.ID, Blueprint: w.bp.ID, Item: w.item.ID, Kind: w.item.Kind, Identifier: w.identifier, Hash: w.hash, Delivery: "profile", Context: osCtx, Note: w.note}
 		switch {
+		case w.state == StateLicensing:
+			record.State = StateLicensing
+			if a == nil || a.State != StateLicensing || a.Note != w.note {
+				if err := e.Store.PutApplication(ctx, record); err != nil {
+					return next, err
+				}
+			}
+			continue
 		case w.state == StateNA:
 			if !sameHash || a.State != StateNA || a.Context != osCtx {
 				record.State = StateNA
@@ -552,7 +569,7 @@ func (e *Engine) Reconcile(ctx context.Context, d *Device) (time.Time, error) {
 				}
 			}
 		}
-		removable := a.Kind == "profile" && a.Identifier != "" && !keep && !desiredIdentifiers[a.Identifier] && (a.State == StateApplied || a.State == StatePending || a.State == StateFailed || a.State == StateRemoving)
+		removable := (a.Kind == "profile" || a.Kind == "app") && a.Delivery != "declarative" && a.Identifier != "" && !keep && !(a.Kind == "profile" && desiredIdentifiers[a.Identifier]) && (a.State == StateApplied || a.State == StatePending || a.State == StateFailed || a.State == StateRemoving)
 		if !removable {
 			if err := e.Store.DeleteApplication(ctx, d.ID, a.Blueprint, a.Item); err != nil {
 				return next, err
@@ -563,7 +580,11 @@ func (e *Engine) Reconcile(ctx context.Context, d *Device) (time.Time, error) {
 			soonest(a.UpdatedAt.Add(e.Cfg.PendingTimeout))
 			continue
 		}
-		cmd, _ := commandsGet("RemoveProfile")
+		removal := "RemoveProfile"
+		if a.Kind == "app" {
+			removal = "RemoveApplication"
+		}
+		cmd, _ := commandsGet(removal)
 		body, uuid, ps := commands.Build(cmd, map[string]any{"Identifier": a.Identifier}, commands.Options{Platform: d.Platform, OSVersion: d.OSVersion, UserEnrollment: d.UserEnrollment()})
 		if len(ps) > 0 {
 			return next, errors.New(ps[0].Error())
@@ -724,6 +745,8 @@ func (e *Engine) reconcileDeclarations(ctx context.Context, d *Device, wants []*
 			continue
 		}
 		switch {
+		case w.state == StateLicensing:
+			rec.State = StateLicensing
 		case w.state == StateNA:
 			rec.State = StateNA
 		case w.state == StateApplied: // an update item for a device that is already there
@@ -923,4 +946,51 @@ func (e *Engine) DEPDeviceEvent(ctx context.Context, d DEPDevice, removed bool) 
 	if e.OnDEPDevice != nil {
 		e.OnDEPDevice(ctx, d, removed)
 	}
+}
+
+// PreLicense gets ready a device Apple has just assigned to this server, before it enrolls: the licenses of the App Store apps the blueprints will give it are assigned to its serial number
+// now, so they are in place when it comes out of Setup Assistant. Only blueprints whose scope can already be decided from what Apple says (DEP name, model, serial) count.
+func (e *Engine) PreLicense(ctx context.Context, dd DEPDevice) {
+	if e.Apps == nil {
+		return
+	}
+	bps, err := e.blueprints(ctx)
+	if err != nil {
+		return
+	}
+	d := &Device{ID: "pre:" + dd.Serial, Serial: dd.Serial, Model: dd.Model, DEPName: dd.DEPName, Platform: depPlatform(dd), Active: true}
+	for _, c := range bps {
+		if !c.scope.Match(d) {
+			continue
+		}
+		for _, it := range c.bp.Items {
+			if it.Kind == "app" && it.AdamID != "" && it.VPPToken != "" {
+				if _, _, err := e.Apps.EnsureLicense(ctx, it.VPPToken, it.AdamID, dd.Serial, d.Platform); err != nil {
+					e.Logger.Info("msg", "pre-licensing", "serial", dd.Serial, "adam_id", it.AdamID, "err", err)
+				}
+			}
+		}
+	}
+}
+
+// depPlatform names the platform of a device Apple assigned: DEP says "OSX" for a Mac, and the model tells an iPad from an iPhone.
+func depPlatform(d DEPDevice) string {
+	switch strings.ToLower(d.OS) {
+	case "osx", "macos":
+		return "macOS"
+	case "tvos":
+		return "tvOS"
+	case "visionos":
+		return "visionOS"
+	}
+	if p := PlatformOf(d.Model); p != "" {
+		return p
+	}
+	if strings.EqualFold(d.OS, "ios") {
+		if strings.Contains(strings.ToLower(d.Model), "ipad") {
+			return "iPadOS"
+		}
+		return "iOS"
+	}
+	return ""
 }

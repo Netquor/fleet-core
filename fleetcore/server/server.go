@@ -35,6 +35,7 @@ import (
 	"github.com/micromdm/nanomdm/fleetcore/schemas"
 	"github.com/micromdm/nanomdm/fleetcore/seal"
 	"github.com/micromdm/nanomdm/fleetcore/vault"
+	"github.com/micromdm/nanomdm/fleetcore/vpp"
 	"github.com/micromdm/nanomdm/fleetcore/workflows"
 	httpapi "github.com/micromdm/nanomdm/http/api"
 	httpmdm "github.com/micromdm/nanomdm/http/mdm"
@@ -116,6 +117,8 @@ type Config struct {
 	BYOD *BYODConfig
 	// ADERoots are the trust anchors for the device certificates that sign an Automated Device Enrollment request; nil uses Apple's.
 	ADERoots *x509.CertPool
+	// VPPBaseURL and AppStoreLookupURL override Apple's Apps and Books and App Store catalog endpoints (tests).
+	VPPBaseURL, AppStoreLookupURL string
 	// MAIDDEPName is the DEP name whose key signs Managed Apple Account tokens; empty uses the only DEP name there is.
 	MAIDDEPName string
 	// NoFeeds stops the server from reaching out to Apple (the device-management schemas on GitHub, the OS releases feed). The built-in snapshot is used.
@@ -276,6 +279,15 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	if sealer != nil {
 		wf.Sealer = sealer
 	}
+	vppStore, err := vpp.NewStore(ctx, cfg.PKIDB, cfg.PKITenant)
+	if err != nil {
+		return nil, fmt.Errorf("vpp: %w", err)
+	}
+	if sealer != nil {
+		vppStore.Sealer = sealer
+	}
+	licensing := &vpp.Licensing{Store: vppStore, BaseURL: cfg.VPPBaseURL}
+	engine.Apps = licensing
 	engine.DDM = ddmStore
 	engine.BaseURL = cfg.BaseURL
 	engine.Organization = cfg.Organization
@@ -444,7 +456,11 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 				if d.DeviceAssignedDate != nil {
 					dd.AssignedAt = *d.DeviceAssignedDate
 				}
-				engine.DEPDeviceEvent(ctx, dd, d.OpType != nil && *d.OpType == godep.DeviceJsonOpTypeDeleted)
+				removed := d.OpType != nil && *d.OpType == godep.DeviceJsonOpTypeDeleted
+				engine.DEPDeviceEvent(ctx, dd, removed)
+				if !removed {
+					engine.PreLicense(ctx, dd) // the apps it will get are licensed to its serial number before it enrolls
+				}
 			}
 		}
 		// A device Apple assigned to this server asks for its enrollment profile here, with no code or sign-in.
@@ -484,6 +500,15 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		if b, ok := cfg.Storage.(workflows.BootstrapReader); ok {
 			bootstrap = b
 		}
+		bpAPI.ResolveApp = func(ctx context.Context, adam string) (string, error) {
+			info, err := vpp.Lookup(ctx, nil, cfg.AppStoreLookupURL, adam, "")
+			if err != nil {
+				return "", err
+			}
+			return info.BundleID, nil
+		}
+		vppHandler := adminAuth(http.StripPrefix("/v1", licensing.Handler()))
+		mux.Handle("/v1/vpp/", vppHandler)
 		wfAPI := &workflows.API{S: wf, Bootstrap: bootstrap}
 		bpHandler := adminAuth(http.StripPrefix("/v1", wfAPI.Handler(bpAPI.Handler())))
 		for _, p := range []string{"/v1/blueprints", "/v1/blueprints/", "/v1/groups", "/v1/groups/", "/v1/devices", "/v1/devices/", "/v1/applicability", "/v1/applicability/", "/v1/schemas", "/v1/schemas/", "/v1/os-releases", "/v1/os-releases/", "/v1/ddm/"} {

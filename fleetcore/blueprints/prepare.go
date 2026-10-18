@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strings"
 
 	"github.com/micromdm/nanomdm/fleetcore/commands"
 	"github.com/micromdm/nanomdm/fleetcore/schemas"
@@ -97,6 +98,35 @@ func (b *Blueprint) Prepare() error {
 			} else if ps := commands.Check(def.Keys, it.Declaration, ""); len(ps) > 0 {
 				return fmt.Errorf("item %s: %s", it.ID, ps[0].Error())
 			}
+		case "app":
+			if (it.AdamID == "") == (it.ManifestURL == "") {
+				return fmt.Errorf("item %s: an app has an adam_id (App Store, licensed through Apps and Books) or a manifest_url (enterprise), not both", it.ID)
+			}
+			if it.AdamID != "" {
+				for _, c := range it.AdamID {
+					if c < '0' || c > '9' {
+						return fmt.Errorf("item %s: adam_id is the App Store number of the app, digits only", it.ID)
+					}
+				}
+				if it.VPPToken == "" {
+					return fmt.Errorf("item %s: vpp_token names the stored Apps and Books token the licenses come from", it.ID)
+				}
+			} else if !strings.HasPrefix(it.ManifestURL, "https://") {
+				return fmt.Errorf("item %s: manifest_url must be https", it.ID)
+			}
+			if it.BundleID == "" && !b.KeepOnLeave && it.ManifestURL != "" {
+				return fmt.Errorf("item %s: bundle_id is needed to remove the app when a device leaves the scope (or set keep_on_leave)", it.ID)
+			}
+			switch it.AutoUpdate {
+			case "", "AlwaysOn", "AlwaysOff", "StoreSettings":
+			default:
+				return fmt.Errorf("item %s: auto_update is AlwaysOn, AlwaysOff or StoreSettings", it.ID)
+			}
+			switch it.Delivery {
+			case "", "auto", "declarative", "command":
+			default:
+				return fmt.Errorf("item %s: delivery is auto, declarative or command", it.ID)
+			}
 		case "os_update":
 			t := it.Target
 			if t == "" {
@@ -118,7 +148,7 @@ func (b *Blueprint) Prepare() error {
 				return fmt.Errorf("item %s: deadline_hour is 0 to 23", it.ID)
 			}
 		default:
-			return fmt.Errorf("item %s: kind must be profile, command, declaration, asset or os_update", it.ID)
+			return fmt.Errorf("item %s: kind must be profile, command, declaration, asset, app or os_update", it.ID)
 		}
 		switch it.Scope {
 		case "", "system":

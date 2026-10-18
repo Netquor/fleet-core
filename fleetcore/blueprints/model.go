@@ -37,6 +37,9 @@ type Device struct {
 	EnrolledAt    time.Time `bson:"enrolled_at,omitempty" json:"enrolled_at,omitempty"`
 	LastSeen      time.Time `bson:"last_seen,omitempty" json:"last_seen,omitempty"`
 	Active        bool      `bson:"active" json:"active"`
+	// Apps is what the device last reported installed (see the workflows' refresh), AppsAt when.
+	Apps   []AppInfo `bson:"apps,omitempty" json:"apps,omitempty"`
+	AppsAt time.Time `bson:"apps_at,omitempty" json:"apps_at,omitempty"`
 	// LostMode and Location are kept by the Lost Mode workflow.
 	LostMode *LostMode `bson:"lost_mode,omitempty" json:"lost_mode,omitempty"`
 	Location *Location `bson:"location,omitempty" json:"location,omitempty"`
@@ -73,6 +76,15 @@ type Item struct {
 	// Setup marks an item a device in Setup Assistant (ADE with await configuration) must have before it is released to the person: the server sends DeviceConfigured when every Setup
 	// item has been applied, found not applicable, or has failed for good, or after the wait runs out.
 	Setup bool `bson:"setup,omitempty" json:"setup,omitempty"`
+	// App (kind "app"): an App Store app licensed through Apps and Books (AdamID and VPPToken, the name of a stored token), or an enterprise app (ManifestURL). BundleID names it for removal.
+	// AppConfig is its managed app configuration. AutoUpdate is AlwaysOn, AlwaysOff or StoreSettings. Delivery auto uses declarative management where the device has it, "command" always
+	// the InstallApplication command.
+	AdamID      string         `bson:"adam_id,omitempty" json:"adam_id,omitempty"`
+	BundleID    string         `bson:"bundle_id,omitempty" json:"bundle_id,omitempty"`
+	ManifestURL string         `bson:"manifest_url,omitempty" json:"manifest_url,omitempty"`
+	VPPToken    string         `bson:"vpp_token,omitempty" json:"vpp_token,omitempty"`
+	AppConfig   map[string]any `bson:"app_config,omitempty" json:"app_config,omitempty"`
+	AutoUpdate  string         `bson:"auto_update,omitempty" json:"auto_update,omitempty"`
 	// Delivery of a profile: "auto" (the default) sends it as a legacy-profile declaration when the device takes declarative management, and as an MDM profile otherwise;
 	// "declarative" insists on declarative management (a device that cannot is told so); "profile" always uses the MDM InstallProfile command.
 	Delivery string `bson:"delivery,omitempty" json:"delivery,omitempty"`
@@ -120,6 +132,10 @@ func (i Item) Hash() string {
 		h.Write(b)
 	}
 	h.Write([]byte(i.Delivery))
+	if i.Kind == "app" {
+		b, _ := json.Marshal(i.AppConfig)
+		h.Write([]byte("app\x00" + i.AdamID + "\x00" + i.BundleID + "\x00" + i.ManifestURL + "\x00" + i.VPPToken + "\x00" + i.AutoUpdate + "\x00" + string(b)))
+	}
 	if i.Setup {
 		h.Write([]byte("setup"))
 	}
@@ -194,6 +210,8 @@ const (
 	StateFailed   = "failed"
 	StateRemoving = "removing"
 	StateNA       = "not_applicable"
+	// StateLicensing: waiting for Apple to assign the app's license to the device.
+	StateLicensing = "licensing"
 )
 
 // EnrollKind is how Apple's schemas name the device's enrollment for allowed-enrollments: user, supervised or device.
@@ -234,4 +252,13 @@ type Location struct {
 	Altitude           float64   `bson:"altitude,omitempty" json:"altitude,omitempty"`
 	HorizontalAccuracy float64   `bson:"horizontal_accuracy,omitempty" json:"horizontal_accuracy,omitempty"`
 	At                 time.Time `bson:"at" json:"at"`
+}
+
+// AppInfo is an installed app as a device reports it.
+type AppInfo struct {
+	Identifier   string `bson:"identifier" json:"identifier"`
+	Name         string `bson:"name,omitempty" json:"name,omitempty"`
+	Version      string `bson:"version,omitempty" json:"version,omitempty"`
+	ShortVersion string `bson:"short_version,omitempty" json:"short_version,omitempty"`
+	Managed      bool   `bson:"managed,omitempty" json:"managed,omitempty"`
 }

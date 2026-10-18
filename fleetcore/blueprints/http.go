@@ -22,6 +22,8 @@ type API struct {
 	Applicability   *applicability.Registry
 	OSReleases      *osreleases.Refresher
 	SchemaRefresher *schemas.Refresher
+	// ResolveApp finds the bundle identifier of an App Store app, for items that give only its number. Nil: the item must carry it.
+	ResolveApp func(ctx context.Context, adamID string) (bundleID string, err error)
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
@@ -77,6 +79,18 @@ func (a *API) Handler() http.Handler {
 		}
 		if id != "" {
 			b.ID = id
+		}
+		if a.ResolveApp != nil {
+			for i := range b.Items {
+				if it := &b.Items[i]; it.Kind == "app" && it.AdamID != "" && it.BundleID == "" {
+					bundle, err := a.ResolveApp(r.Context(), it.AdamID)
+					if err != nil {
+						fail(w, 422, "item "+it.ID+": "+err.Error())
+						return
+					}
+					it.BundleID = bundle
+				}
+			}
 		}
 		if err := b.Prepare(); err != nil {
 			fail(w, 422, err.Error())

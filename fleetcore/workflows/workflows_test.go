@@ -319,3 +319,25 @@ func TestAPIRevealIsAudited(t *testing.T) {
 		t.Errorf("unsupervised: %d %s", code, b)
 	}
 }
+
+func TestInstalledApps(t *testing.T) {
+	e := setup(t)
+	e.device(t, "phone", "iOS", "18.2", true, "Device")
+	e.device(t, "byod", "iOS", "18.2", false, "User Enrollment")
+	u, err := e.s.RefreshApps(e.ctx, "phone", "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.answer("phone", u, "Acknowledged", `<key>InstalledApplicationList</key><array><dict><key>Identifier</key><string>com.tinyspeck.chatlyio</string><key>Name</key><string>Slack</string><key>Version</key><string>123</string><key>ShortVersion</key><string>4.1</string><key>IsManaged</key><true/></dict><dict><key>Identifier</key><string>com.apple.mobilesafari</string><key>Name</key><string>Safari</string></dict></array>`)
+	d, _ := e.st.GetDevice(e.ctx, "phone")
+	if len(d.Apps) != 2 || d.Apps[0].Identifier != "com.tinyspeck.chatlyio" || !d.Apps[0].Managed || d.Apps[0].ShortVersion != "4.1" || d.AppsAt.IsZero() {
+		t.Errorf("apps: %+v", d.Apps)
+	}
+	// a User Enrollment device is asked for managed apps only
+	if _, err := e.s.RefreshApps(e.ctx, "byod", "alice"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, c := e.enq.last(t); c["ManagedAppsOnly"] != true {
+		t.Errorf("a BYOD device was asked for everything: %v", c)
+	}
+}

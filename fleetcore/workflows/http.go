@@ -23,6 +23,7 @@ type BootstrapReader interface {
 //	GET  /devices/{id}/secrets                          what is stored (kinds, versions, who, when), never values
 //	POST /devices/{id}/secrets/{kind}/reveal            {"reason": "...", "version": 0}: the value, with the access recorded
 //	GET  /devices/{id}/secrets/audit                    who read what, and why
+//	POST /devices/{id}/apps/refresh    GET /apps     what is installed, as the device last reported
 //	POST /devices/{id}/lost-mode  DELETE  /locate  /play-sound   GET /lost-mode
 //	POST /devices/{id}/activation-lock/bypass-code      DELETE clears it on the device
 //	POST /devices/{id}/filevault/rotate                 {"password": ""}: empty uses the stored recovery key
@@ -138,6 +139,18 @@ func (a *API) Handler(fallback http.Handler) http.Handler {
 		write(w, 200, map[string]any{"audit": rows})
 	})
 
+	mux.HandleFunc("POST /devices/{id}/apps/refresh", func(w http.ResponseWriter, r *http.Request) {
+		u, err := s.RefreshApps(r.Context(), r.PathValue("id"), who(r))
+		queued(w, u, err)
+	})
+	mux.HandleFunc("GET /devices/{id}/apps", func(w http.ResponseWriter, r *http.Request) {
+		d, err := s.device(r.Context(), r.PathValue("id"))
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		write(w, 200, map[string]any{"apps": d.Apps, "reported_at": d.AppsAt})
+	})
 	mux.HandleFunc("POST /devices/{id}/lost-mode", func(w http.ResponseWriter, r *http.Request) {
 		var req LostModeRequest
 		if !body(r, &req) {

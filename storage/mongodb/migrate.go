@@ -20,7 +20,7 @@ func (s *MongoDBStorage) RetrieveMigrationCheckins(ctx context.Context, c chan<-
 		}
 	}
 	// TODO: if a TokenUpdate does not include the latest UnlockToken then we should synthesize a TokenUpdate to transfer it over.
-	devices, err := s.db.Collection(cDevices).Find(ctx, bson.D{}, options.Find().SetProjection(bson.D{{Key: "authenticate", Value: 1}, {Key: "token_update", Value: 1}}))
+	devices, err := s.db.Collection(cDevices).Find(ctx, s.scope(bson.D{}), options.Find().SetProjection(bson.D{{Key: "authenticate", Value: 1}, {Key: "token_update", Value: 1}}))
 	if err != nil {
 		return err
 	}
@@ -39,7 +39,7 @@ func (s *MongoDBStorage) RetrieveMigrationCheckins(ctx context.Context, c chan<-
 	if err := devices.Err(); err != nil {
 		return err
 	}
-	users, err := s.db.Collection(cUsers).Find(ctx, bson.D{}, options.Find().SetProjection(bson.D{{Key: "token_update", Value: 1}}))
+	users, err := s.db.Collection(cUsers).Find(ctx, s.scope(bson.D{}), options.Find().SetProjection(bson.D{{Key: "token_update", Value: 1}}))
 	if err != nil {
 		return err
 	}

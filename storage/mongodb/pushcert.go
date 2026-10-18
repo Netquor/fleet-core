@@ -18,7 +18,7 @@ func (s *MongoDBStorage) RetrievePushCert(ctx context.Context, topic string) ([]
 		Key   string `bson:"key_pem"`
 		Stale int    `bson:"stale_token"`
 	}
-	if err := s.db.Collection(cPushCerts).FindOne(ctx, bson.D{{Key: "_id", Value: topic}}).Decode(&d); err != nil {
+	if err := s.db.Collection(cPushCerts).FindOne(ctx, bson.D{{Key: "_id", Value: s.pk(topic)}}).Decode(&d); err != nil {
 		return nil, nil, "", err
 	}
 	return []byte(d.Cert), []byte(d.Key), strconv.Itoa(d.Stale), nil
@@ -33,7 +33,7 @@ func (s *MongoDBStorage) IsPushCertStale(ctx context.Context, topic, staleToken 
 	var d struct {
 		Stale int `bson:"stale_token"`
 	}
-	err = s.db.Collection(cPushCerts).FindOne(ctx, bson.D{{Key: "_id", Value: topic}}, options.FindOne().SetProjection(bson.D{{Key: "stale_token", Value: 1}})).Decode(&d)
+	err = s.db.Collection(cPushCerts).FindOne(ctx, bson.D{{Key: "_id", Value: s.pk(topic)}}, options.FindOne().SetProjection(bson.D{{Key: "stale_token", Value: 1}})).Decode(&d)
 	if err != nil {
 		return true, err
 	}
@@ -46,13 +46,13 @@ func (s *MongoDBStorage) StorePushCert(ctx context.Context, pemCert, pemKey []by
 	if err != nil {
 		return err
 	}
-	_, err = s.db.Collection(cPushCerts).UpdateOne(ctx, bson.D{{Key: "_id", Value: topic}},
-		mongo.Pipeline{{{Key: "$set", Value: bson.D{
+	_, err = s.db.Collection(cPushCerts).UpdateOne(ctx, bson.D{{Key: "_id", Value: s.pk(topic)}},
+		mongo.Pipeline{{{Key: "$set", Value: s.stampSet(bson.D{
 			{Key: "topic", Value: lit(topic)}, {Key: "cert_pem", Value: lit(string(pemCert))}, {Key: "key_pem", Value: lit(string(pemKey))},
 			{Key: "stale_token", Value: bson.D{{Key: "$cond", Value: bson.A{bson.D{{Key: "$eq", Value: bson.A{bson.D{{Key: "$type", Value: "$stale_token"}}, "missing"}}}, 0, bson.D{{Key: "$add", Value: bson.A{"$stale_token", 1}}}}}}},
 			{Key: "created_at", Value: bson.D{{Key: "$ifNull", Value: bson.A{"$created_at", "$$NOW"}}}},
 			{Key: "updated_at", Value: "$$NOW"},
-		}}}},
+		})}}},
 		options.UpdateOne().SetUpsert(true))
 	return err
 }

@@ -15,8 +15,12 @@ func (s *MongoDBStorage) RetrievePushInfo(ctx context.Context, ids []string) (ma
 	if len(ids) < 1 {
 		return nil, errors.New("no ids provided")
 	}
-	cur, err := s.db.Collection(cEnrollments).Find(ctx, bson.D{{Key: "_id", Value: bson.D{{Key: "$in", Value: ids}}}},
-		options.Find().SetProjection(bson.D{{Key: "topic", Value: 1}, {Key: "push_magic", Value: 1}, {Key: "token_hex", Value: 1}}))
+	pks := make([]string, len(ids))
+	for i, id := range ids {
+		pks[i] = s.pk(id)
+	}
+	cur, err := s.db.Collection(cEnrollments).Find(ctx, bson.D{{Key: "_id", Value: bson.D{{Key: "$in", Value: pks}}}},
+		options.Find().SetProjection(bson.D{{Key: "id", Value: 1}, {Key: "topic", Value: 1}, {Key: "push_magic", Value: 1}, {Key: "token_hex", Value: 1}}))
 	if err != nil {
 		return nil, err
 	}
@@ -24,7 +28,7 @@ func (s *MongoDBStorage) RetrievePushInfo(ctx context.Context, ids []string) (ma
 	out := make(map[string]*mdm.Push)
 	for cur.Next(ctx) {
 		var d struct {
-			ID    string `bson:"_id"`
+			ID    string `bson:"id"`
 			Topic string `bson:"topic"`
 			Magic string `bson:"push_magic"`
 			Token string `bson:"token_hex"`

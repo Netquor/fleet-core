@@ -27,7 +27,6 @@ const (
 	cUsers        = "users"
 	cEnrollments  = "enrollments"
 	cCommands     = "commands"
-	cResults      = "command_results"
 	cQueue        = "enrollment_queue"
 	cPushCerts    = "push_certs"
 	cCertAuth     = "cert_auth_associations"
@@ -42,10 +41,49 @@ type MongoDBStorage struct {
 	client *mongo.Client
 	db     *mongo.Database
 	rm     bool
-	owned  bool // whether Close should disconnect the client
+	owned  bool   // whether Close should disconnect the client
+	tid    string // the tenant, when tenants share collections (empty: this database is the tenant's alone)
+}
+
+// pk is the _id of a document that is keyed by an id: the id itself, or the tenant and the id when tenants share collections.
+func (s *MongoDBStorage) pk(id string) string {
+	if s.tid == "" {
+		return id
+	}
+	return s.tid + "\x1f" + id
+}
+
+// scope puts the tenant in front of a filter, when tenants share collections. Every query on a collection that holds more than one tenant goes through it (or through pk), so a store bound to one tenant cannot see another's data.
+func (s *MongoDBStorage) scope(f bson.D) bson.D {
+	if s.tid == "" {
+		return f
+	}
+	return append(bson.D{{Key: "t", Value: s.tid}}, f...)
+}
+
+// stamp adds the tenant to a document being written, when tenants share collections.
+func (s *MongoDBStorage) stamp(d bson.D) bson.D {
+	if s.tid == "" {
+		return d
+	}
+	return append(d, bson.E{Key: "t", Value: s.tid})
+}
+
+// stampSet is stamp for the fields of an aggregation-pipeline $set (the tenant is a literal there).
+func (s *MongoDBStorage) stampSet(d bson.D) bson.D {
+	if s.tid == "" {
+		return d
+	}
+	return append(d, bson.E{Key: "t", Value: lit(s.tid)})
+}
+
+// onInsert is what a new document keyed by an id starts with: its id (also kept apart from _id, which carries the tenant when they share), its creation time, and the tenant.
+func (s *MongoDBStorage) onInsert(id string, t time.Time) bson.D {
+	return s.stamp(bson.D{{Key: "id", Value: id}, {Key: "created_at", Value: t}})
 }
 
 type config struct {
+	tenant string
 	uri    string
 	dbName string
 	client *mongo.Client
@@ -66,6 +104,10 @@ func WithURI(uri string) Option { return func(c *config) { c.uri = uri } }
 // WithDatabase names the database, overriding the URI's.
 func WithDatabase(name string) Option { return func(c *config) { c.dbName = name } }
 
+// WithTenant binds the store to one tenant that shares its collections with others: every document carries the tenant, every query is scoped to it, and indexes lead with it.
+// Without it the whole database belongs to one tenant (a database per tenant). The tenant cannot be changed after the store is made.
+func WithTenant(id string) Option { return func(c *config) { c.tenant = id } }
+
 // WithClient uses an existing client (which the caller keeps ownership of).
 func WithClient(client *mongo.Client) Option { return func(c *config) { c.client = client } }
 
@@ -81,7 +123,7 @@ func New(ctx context.Context, opts ...Option) (*MongoDBStorage, error) {
 	for _, opt := range opts {
 		opt(cfg)
 	}
-	s := &MongoDBStorage{logger: cfg.logger, rm: cfg.rm}
+	s := &MongoDBStorage{logger: cfg.logger, rm: cfg.rm, tid: cfg.tenant}
 	name := cfg.dbName
 	if cfg.client == nil {
 		if cfg.uri == "" {
@@ -133,6 +175,9 @@ func (s *MongoDBStorage) EnsureIndexes(ctx context.Context) error {
 	}
 	key := func(kv ...any) bson.D {
 		d := bson.D{}
+		if s.tid != "" {
+			d = append(d, bson.E{Key: "t", Value: 1}) // tenants share collections: every index leads with the tenant
+		}
 		for i := 0; i+1 < len(kv); i += 2 {
 			d = append(d, bson.E{Key: kv[i].(string), Value: kv[i+1]})
 		}
@@ -150,15 +195,9 @@ func (s *MongoDBStorage) EnsureIndexes(ctx context.Context) error {
 				mongo.IndexModel{Keys: key("user_id", 1), Options: options.Index().SetUnique(true).SetPartialFilterExpression(bson.D{{Key: "user_id", Value: bson.D{{Key: "$type", Value: "string"}}}})})
 		},
 		func() error {
-			return idx(cResults,
-				mongo.IndexModel{Keys: key("id", 1, "command_uuid", 1), Options: unique},
-				mongo.IndexModel{Keys: key("command_uuid", 1)},
-				mongo.IndexModel{Keys: key("status", 1)})
-		},
-		func() error {
 			return idx(cQueue,
 				mongo.IndexModel{Keys: key("id", 1, "command_uuid", 1), Options: unique},
-				mongo.IndexModel{Keys: key("id", 1, "active", 1, "priority", -1, "created_at", 1)},
+				mongo.IndexModel{Keys: key("id", 1, "active", 1, "status", 1, "priority", -1, "created_at", 1)},
 				mongo.IndexModel{Keys: key("command_uuid", 1)})
 		},
 		func() error {
@@ -200,7 +239,7 @@ func (s *MongoDBStorage) StoreAuthenticate(r *mdm.Request, msg *mdm.Authenticate
 	}
 	t := now()
 	_, err := s.db.Collection(cDevices).UpdateOne(r.Context(),
-		bson.D{{Key: "_id", Value: r.ID}},
+		bson.D{{Key: "_id", Value: s.pk(r.ID)}},
 		bson.D{
 			{Key: "$set", Value: bson.D{
 				{Key: "identity_cert", Value: nullEmpty(string(pemCert))},
@@ -212,7 +251,7 @@ func (s *MongoDBStorage) StoreAuthenticate(r *mdm.Request, msg *mdm.Authenticate
 				{Key: "authenticate_at", Value: t},
 				{Key: "updated_at", Value: t},
 			}},
-			{Key: "$setOnInsert", Value: bson.D{{Key: "created_at", Value: t}}},
+			{Key: "$setOnInsert", Value: s.onInsert(r.ID, t)},
 		},
 		options.UpdateOne().SetUpsert(true))
 	return err
@@ -225,7 +264,7 @@ func (s *MongoDBStorage) storeDeviceTokenUpdate(r *mdm.Request, msg *mdm.TokenUp
 	if len(msg.UnlockToken) > 0 {
 		set = append(set, bson.E{Key: "unlock_token", Value: msg.UnlockToken}, bson.E{Key: "unlock_token_at", Value: t})
 	}
-	_, err := s.db.Collection(cDevices).UpdateOne(r.Context(), bson.D{{Key: "_id", Value: r.ID}}, bson.D{{Key: "$set", Value: set}})
+	_, err := s.db.Collection(cDevices).UpdateOne(r.Context(), bson.D{{Key: "_id", Value: s.pk(r.ID)}}, bson.D{{Key: "$set", Value: set}})
 	return err
 }
 
@@ -236,7 +275,7 @@ func (s *MongoDBStorage) storeUserTokenUpdate(r *mdm.Request, msg *mdm.TokenUpda
 	}
 	t := now()
 	_, err := s.db.Collection(cUsers).UpdateOne(r.Context(),
-		bson.D{{Key: "_id", Value: r.ID}},
+		bson.D{{Key: "_id", Value: s.pk(r.ID)}},
 		bson.D{
 			{Key: "$set", Value: bson.D{
 				{Key: "device_id", Value: r.ParentID},
@@ -247,7 +286,7 @@ func (s *MongoDBStorage) storeUserTokenUpdate(r *mdm.Request, msg *mdm.TokenUpda
 				{Key: "token_update_at", Value: t},
 				{Key: "updated_at", Value: t},
 			}},
-			{Key: "$setOnInsert", Value: bson.D{{Key: "created_at", Value: t}}},
+			{Key: "$setOnInsert", Value: s.onInsert(r.ID, t)},
 		},
 		options.UpdateOne().SetUpsert(true))
 	return err
@@ -273,8 +312,9 @@ func (s *MongoDBStorage) StoreTokenUpdate(r *mdm.Request, msg *mdm.TokenUpdate) 
 	}
 	// One pipeline update does what the SQL "ON CONFLICT DO UPDATE" does: a new enrollment starts at tally 1 and each TokenUpdate adds one.
 	_, err = s.db.Collection(cEnrollments).UpdateOne(r.Context(),
-		bson.D{{Key: "_id", Value: r.ID}},
-		mongo.Pipeline{{{Key: "$set", Value: bson.D{
+		bson.D{{Key: "_id", Value: s.pk(r.ID)}},
+		mongo.Pipeline{{{Key: "$set", Value: s.stampSet(bson.D{
+			{Key: "id", Value: lit(r.ID)},
 			{Key: "device_id", Value: lit(deviceID)},
 			{Key: "user_id", Value: lit(nullEmpty(userID))},
 			{Key: "type", Value: lit(r.Type.String())},
@@ -286,7 +326,7 @@ func (s *MongoDBStorage) StoreTokenUpdate(r *mdm.Request, msg *mdm.TokenUpdate) 
 			{Key: "updated_at", Value: "$$NOW"},
 			{Key: "created_at", Value: bson.D{{Key: "$ifNull", Value: bson.A{"$created_at", "$$NOW"}}}},
 			{Key: "token_update_tally", Value: bson.D{{Key: "$add", Value: bson.A{bson.D{{Key: "$ifNull", Value: bson.A{"$token_update_tally", 0}}}, 1}}}},
-		}}}},
+		})}}},
 		options.UpdateOne().SetUpsert(true))
 	return err
 }
@@ -296,7 +336,7 @@ func (s *MongoDBStorage) RetrieveTokenUpdateTally(ctx context.Context, id string
 	var doc struct {
 		Tally int `bson:"token_update_tally"`
 	}
-	err := s.db.Collection(cEnrollments).FindOne(ctx, bson.D{{Key: "_id", Value: id}}, options.FindOne().SetProjection(bson.D{{Key: "token_update_tally", Value: 1}})).Decode(&doc)
+	err := s.db.Collection(cEnrollments).FindOne(ctx, bson.D{{Key: "_id", Value: s.pk(id)}}, options.FindOne().SetProjection(bson.D{{Key: "token_update_tally", Value: 1}})).Decode(&doc)
 	if errors.Is(err, mongo.ErrNoDocuments) {
 		return 0, nil
 	}
@@ -312,7 +352,7 @@ func (s *MongoDBStorage) StoreUserAuthenticate(r *mdm.Request, msg *mdm.UserAuth
 	}
 	t := now()
 	_, err := s.db.Collection(cUsers).UpdateOne(r.Context(),
-		bson.D{{Key: "_id", Value: r.ID}},
+		bson.D{{Key: "_id", Value: s.pk(r.ID)}},
 		bson.D{
 			{Key: "$set", Value: bson.D{
 				{Key: "device_id", Value: r.ParentID},
@@ -322,7 +362,7 @@ func (s *MongoDBStorage) StoreUserAuthenticate(r *mdm.Request, msg *mdm.UserAuth
 				{Key: colAt, Value: t},
 				{Key: "updated_at", Value: t},
 			}},
-			{Key: "$setOnInsert", Value: bson.D{{Key: "created_at", Value: t}}},
+			{Key: "$setOnInsert", Value: s.onInsert(r.ID, t)},
 		},
 		options.UpdateOne().SetUpsert(true))
 	if err != nil {
@@ -338,17 +378,33 @@ func (s *MongoDBStorage) Disable(r *mdm.Request) error {
 	}
 	t := now()
 	_, err := s.db.Collection(cEnrollments).UpdateMany(r.Context(),
-		bson.D{{Key: "device_id", Value: r.ID}, {Key: "enabled", Value: true}},
+		s.scope(bson.D{{Key: "device_id", Value: r.ID}, {Key: "enabled", Value: true}}),
 		bson.D{{Key: "$set", Value: bson.D{{Key: "enabled", Value: false}, {Key: "token_update_tally", Value: 0}, {Key: "last_seen_at", Value: t}, {Key: "updated_at", Value: t}}}})
 	return err
 }
 
 func (s *MongoDBStorage) updateLastSeen(r *mdm.Request) error {
 	t := now()
-	_, err := s.db.Collection(cEnrollments).UpdateOne(r.Context(), bson.D{{Key: "_id", Value: r.ID}},
+	_, err := s.db.Collection(cEnrollments).UpdateOne(r.Context(), bson.D{{Key: "_id", Value: s.pk(r.ID)}},
 		bson.D{{Key: "$set", Value: bson.D{{Key: "last_seen_at", Value: t}, {Key: "updated_at", Value: t}}}})
 	if err != nil {
 		return fmt.Errorf("updating last seen: %w", err)
 	}
 	return nil
+}
+
+// DeleteTenant removes everything of this store's tenant from the shared collections (a tenant leaving). Only a store bound with WithTenant can do it; when a database is the tenant's alone, drop the database.
+// It deletes in each collection by tenant, in batches the server handles one after another; nothing of any other tenant is touched.
+func (s *MongoDBStorage) DeleteTenant(ctx context.Context) (deleted int64, err error) {
+	if s.tid == "" {
+		return 0, errors.New("DeleteTenant needs a tenant: drop the database when it belongs to one tenant")
+	}
+	for _, c := range []string{cQueue, cCommands, cEnrollments, cUsers, cDevices, cCertAuth, cPushCerts} {
+		res, err := s.db.Collection(c).DeleteMany(ctx, bson.D{{Key: "t", Value: s.tid}})
+		if err != nil {
+			return deleted, fmt.Errorf("deleting %s: %w", c, err)
+		}
+		deleted += res.DeletedCount
+	}
+	return deleted, nil
 }

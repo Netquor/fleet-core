@@ -17,12 +17,17 @@ import (
 	nlhttp "github.com/micromdm/nanolib/http"
 	"github.com/micromdm/nanolib/http/trace"
 	"github.com/micromdm/nanolib/log"
+	nanoapi "github.com/micromdm/nanomdm/api"
 	"github.com/micromdm/nanomdm/certverify"
 	"github.com/micromdm/nanomdm/cryptoutil"
+	"github.com/micromdm/nanomdm/fleetcore/applicability"
+	"github.com/micromdm/nanomdm/fleetcore/blueprints"
 	"github.com/micromdm/nanomdm/fleetcore/commands"
 	"github.com/micromdm/nanomdm/fleetcore/dep"
 	"github.com/micromdm/nanomdm/fleetcore/enroll"
+	"github.com/micromdm/nanomdm/fleetcore/osreleases"
 	"github.com/micromdm/nanomdm/fleetcore/pki"
+	"github.com/micromdm/nanomdm/fleetcore/schemas"
 	httpapi "github.com/micromdm/nanomdm/http/api"
 	httpmdm "github.com/micromdm/nanomdm/http/mdm"
 	"github.com/micromdm/nanomdm/push/nanopush"
@@ -93,6 +98,9 @@ type Config struct {
 	// EnrollAuthorize, if set, decides who may download an enrollment profile (a code, an invite, a session).
 	EnrollAuthorize func(*http.Request) error
 
+	// NoFeeds stops the server from reaching out to Apple (the device-management schemas on GitHub, the OS releases feed). The built-in snapshot is used.
+	NoFeeds bool
+
 	Logger log.Logger
 	Debug  bool
 	// Version is shown at /version.
@@ -107,7 +115,11 @@ type Server struct {
 	Depot  *pki.MongoDepot
 	// DEP is Automated Device Enrollment (nil without an API key). Call Run to start its syncers.
 	DEP *dep.Service
-	cfg Config
+	// Blueprints keeps devices matching their blueprints; Run starts it.
+	Blueprints *blueprints.Engine
+	releases   *osreleases.Refresher
+	schemaFeed *schemas.Refresher
+	cfg        Config
 }
 
 const (
@@ -178,14 +190,52 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		nanomdm.WithUserAuthenticate(nanomdm.NewUAService(cfg.Storage, false)),
 		nanomdm.WithGetToken(nanomdm.NewTokenMux()),
 		nanomdm.WithLogger(logger.With("service", "nanomdm")))
-	var mdmService service.CheckinAndCommandService = nano
+	var popts []nanopush.Option
+	if cfg.PushURL != "" {
+		popts = append(popts, nanopush.WithPushServerURL(cfg.PushURL))
+	}
+	ps := pushsvc.New(cfg.Storage, cfg.Storage, nanopush.NewFactory(popts...), logger.With("service", "push"))
+
+	// ---- blueprints: desired state, kept true by a reconciler that learns of devices from check-ins ----
+	bpStore, err := blueprints.NewStore(ctx, cfg.PKIDB, cfg.PKITenant)
+	if err != nil {
+		return nil, fmt.Errorf("blueprints: %w", err)
+	}
+	profileRules, err := applicability.NewRegistry(ctx, cfg.PKIDB, cfg.PKITenant)
+	if err != nil {
+		return nil, fmt.Errorf("applicability: %w", err)
+	}
+	catalog := &osreleases.Catalog{}
+	relFeed := &osreleases.Refresher{Catalog: catalog, DB: cfg.PKIDB, Logf: func(f string, a ...any) { logger.Info("msg", fmt.Sprintf(f, a...)) }}
+	if err := relFeed.Load(ctx); err != nil {
+		return nil, fmt.Errorf("os releases: %w", err)
+	}
+	schemaFeed := &schemas.Refresher{Ref: "release", DB: cfg.PKIDB, Logf: func(f string, a ...any) { logger.Info("msg", fmt.Sprintf(f, a...)) }}
+	if err := schemaFeed.Load(ctx); err != nil {
+		return nil, fmt.Errorf("schemas: %w", err)
+	}
+	pe, err := nanoapi.NewPushEnqueuer(cfg.Storage, ps, nanoapi.WithLogger(logger.With("service", "blueprints")))
+	if err != nil {
+		return nil, err
+	}
+	engine := blueprints.New(bpStore, pushEnqueuer{pe}, profileRules, catalog, logger.With("service", "blueprints"), blueprints.Config{})
+	// A new Apple release or schema changes what is out of date and what applies: look at every device again.
+	relFeed.OnChange = func([]osreleases.Release) {
+		_ = bpStore.Touch(context.Background(), blueprints.Rule{})
+		engine.Invalidate()
+	}
+	schemas.OnChange(func(*schemas.Set) { _ = bpStore.Touch(context.Background(), blueprints.Rule{}) })
+
+	observer := &blueprints.Observer{Store: bpStore, Logger: logger.With("service", "observer")}
+	svcs := []service.CheckinAndCommandService{nano, observer}
 	if cfg.WebhookURL != "" {
 		whOpts := []webhook.Option{webhook.WithTokenUpdateTalley(cfg.Storage), webhook.WithEventID(trace.GetTraceID)}
 		if cfg.WebhookHMACKey != "" {
 			whOpts = append(whOpts, webhook.WithHMACSecret([]byte(cfg.WebhookHMACKey)))
 		}
-		mdmService = multi.New(logger.With("service", "multi"), mdmService, webhook.New(cfg.WebhookURL, whOpts...))
+		svcs = append(svcs, webhook.New(cfg.WebhookURL, whOpts...))
 	}
+	var mdmService service.CheckinAndCommandService = multi.New(logger.With("service", "multi"), svcs...)
 	certOpts := []certauth.Option{certauth.WithLogger(logger.With("service", "certauth"))}
 	if cfg.AllowRetroactive {
 		certOpts = append(certOpts, certauth.WithAllowRetroactive())
@@ -256,11 +306,6 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		apiAuth.Use(func(h http.Handler) http.Handler {
 			return nlhttp.NewSimpleBasicAuthHandler(h, "fleetcore", cfg.APIKey, "fleetcore")
 		})
-		var popts []nanopush.Option
-		if cfg.PushURL != "" {
-			popts = append(popts, nanopush.WithPushServerURL(cfg.PushURL))
-		}
-		ps := pushsvc.New(cfg.Storage, cfg.Storage, nanopush.NewFactory(popts...), logger.With("service", "push"))
 		httpapi.HandleAPIv1("/v1", apiAuth, logger, cfg.Storage, ps)
 
 		// ---- JSON command API ----
@@ -276,9 +321,16 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		}
 		mux.Handle("/v1/commands", nlhttp.NewSimpleBasicAuthHandler(ch, "fleetcore", cfg.APIKey, "fleetcore"))
 		mux.Handle("/v1/commands/", nlhttp.NewSimpleBasicAuthHandler(ch, "fleetcore", cfg.APIKey, "fleetcore"))
+
+		// ---- blueprints, groups, devices, platform applicability, schemas, OS releases ----
+		bpAPI := &blueprints.API{Engine: engine, Applicability: profileRules, OSReleases: relFeed, SchemaRefresher: schemaFeed}
+		bpHandler := nlhttp.NewSimpleBasicAuthHandler(http.StripPrefix("/v1", bpAPI.Handler()), "fleetcore", cfg.APIKey, "fleetcore")
+		for _, p := range []string{"/v1/blueprints", "/v1/blueprints/", "/v1/groups", "/v1/groups/", "/v1/devices/", "/v1/applicability", "/v1/applicability/", "/v1/schemas", "/v1/schemas/", "/v1/os-releases", "/v1/os-releases/"} {
+			mux.Handle(p, bpHandler)
+		}
 	}
 
-	return &Server{Handler: trace.NewTraceLoggingHandler(mux, logger.With("handler", "log"), newTraceID), CAPool: pool, Depot: depot, DEP: depSvc, cfg: cfg}, nil
+	return &Server{Handler: trace.NewTraceLoggingHandler(mux, logger.With("handler", "log"), newTraceID), CAPool: pool, Depot: depot, DEP: depSvc, Blueprints: engine, releases: relFeed, schemaFeed: schemaFeed, cfg: cfg}, nil
 }
 
 // TLSConfig for a listener that terminates TLS here: the given certificate (a public one devices trust), and a request for a client certificate, which is checked by the MDM handlers
@@ -301,13 +353,37 @@ func newTraceID(_ *http.Request) string {
 	return fmt.Sprintf("%x", b)
 }
 
-// Run starts the background work (the DEP syncers) and returns when ctx ends.
+// Run starts the background work (the blueprint reconciler, the DEP syncers, the feeds from Apple) and returns when ctx ends.
 func (s *Server) Run(ctx context.Context) error {
+	go s.Blueprints.Run(ctx)
+	if !s.cfg.NoFeeds {
+		go s.releases.Run(ctx, time.Hour)
+		go s.schemaFeed.Run(ctx, 24*time.Hour)
+	}
 	if s.DEP == nil {
 		<-ctx.Done()
 		return nil
 	}
 	return s.DEP.Run(ctx)
+}
+
+// pushEnqueuer queues commands for the blueprint engine and wakes the devices. A push that cannot be delivered (the device is offline) is not a failure: the command waits in the queue.
+type pushEnqueuer struct{ pe *nanoapi.PushEnqueuer }
+
+func (p pushEnqueuer) Enqueue(ctx context.Context, ids []string, body []byte) error {
+	res, _, err := p.pe.RawCommandEnqueueWithPush(ctx, body, ids, false)
+	if res != nil {
+		if res.EnqueueError != nil {
+			return res.EnqueueError
+		}
+		for _, st := range res.Status {
+			if st.EnqueueError != nil {
+				return st.EnqueueError
+			}
+		}
+		return nil
+	}
+	return err
 }
 
 // resultAdapter lets the MongoDB storage's results feed the command API without either importing the other.

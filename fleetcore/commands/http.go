@@ -76,11 +76,11 @@ func Handler(prefix string, cat *Catalog, enq storage.CommandEnqueuer, pusher pu
 			Destructive bool              `json:"destructive,omitempty"`
 			OS          map[string]OSInfo `json:"os,omitempty"`
 		}
-		rows := make([]row, 0, len(cat.Commands))
-		for _, c := range cat.Commands {
+		rows := make([]row, 0, len(cat.All()))
+		for _, c := range cat.All() {
 			rows = append(rows, row{c.RequestType, c.Title, c.Description, c.Destructive, c.OS})
 		}
-		writeJSON(w, 200, map[string]any{"ref": cat.Ref, "commands": rows})
+		writeJSON(w, 200, map[string]any{"ref": cat.Ref(), "commands": rows})
 	})
 	mux.HandleFunc(prefix+"/types/", func(w http.ResponseWriter, r *http.Request) {
 		c, ok := cat.Get(strings.TrimPrefix(r.URL.Path, prefix+"/types/"))
@@ -113,7 +113,7 @@ func Handler(prefix string, cat *Catalog, enq storage.CommandEnqueuer, pusher pu
 				fail(w, 422, req.RequestType+" can lose data or lock someone out: send \"confirm\": true to proceed")
 				return
 			}
-			body, uuid, ps := c.Build(req.Params, Options{Platform: req.Platform, CommandUUID: req.CommandUUID})
+			body, uuid, ps := Build(c, req.Params, Options{Platform: req.Platform, CommandUUID: req.CommandUUID})
 			if len(ps) > 0 {
 				fail(w, 422, "the command is not valid", ps...)
 				return

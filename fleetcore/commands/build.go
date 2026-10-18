@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/micromdm/nanomdm/fleetcore/schemas"
 	"github.com/micromdm/plist"
 )
 
@@ -30,16 +31,22 @@ func (p Problem) Error() string {
 type Options struct {
 	// Platform (macOS, iOS, tvOS, visionOS, watchOS), if known, rejects commands and keys that do not exist there.
 	Platform string
+	// OSVersion, if known with Platform, rejects commands Apple has removed by that version and keys it has removed.
+	OSVersion string
 	// CommandUUID to use; empty makes a random one.
 	CommandUUID string
 }
 
 // Build checks params against the command's schema and, if they are valid, returns the command plist for a device and its CommandUUID.
 // Types follow JSON: numbers for integers and reals, base64 strings for data, RFC 3339 strings for dates.
-func (c *Command) Build(params map[string]any, o Options) (plistXML []byte, uuid string, problems []Problem) {
+func Build(c *Command, params map[string]any, o Options) (plistXML []byte, uuid string, problems []Problem) {
 	if o.Platform != "" {
-		if info, ok := c.OS[o.Platform]; ok && info.Introduced == "n/a" {
-			problems = append(problems, Problem{Message: c.RequestType + " does not exist on " + o.Platform})
+		if info, ok := c.OS[schemas.SchemaOS(o.Platform)]; ok && info.UnsupportedOn(o.OSVersion) {
+			msg := c.RequestType + " does not exist on " + o.Platform
+			if info.Removed != "" && info.Removed != "n/a" && o.OSVersion != "" {
+				msg = c.RequestType + " was removed in " + o.Platform + " " + info.Removed + "; use a declarative management configuration instead"
+			}
+			problems = append(problems, Problem{Message: msg})
 		}
 	}
 	body, ps := convertDict(c.Keys, params, "", o.Platform)
@@ -116,7 +123,7 @@ func convertDict(keys []Key, in map[string]any, path, platform string) (map[stri
 			}
 		}
 		if platform != "" {
-			if info, has := k.OS[platform]; has && info.Introduced == "n/a" {
+			if info, has := k.OS[schemas.SchemaOS(platform)]; has && info.Introduced == "n/a" {
 				problems = append(problems, Problem{Path: p, Message: "does not exist on " + platform})
 				continue
 			}

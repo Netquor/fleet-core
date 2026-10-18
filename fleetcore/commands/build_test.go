@@ -20,13 +20,13 @@ func req(t *testing.T, typ, params string, o Options) ([]byte, string, []Problem
 	if err := d.Decode(&p); err != nil {
 		t.Fatal(err)
 	}
-	return cmd.Build(p, o)
+	return Build(cmd, p, o)
 }
 
 func TestCatalog(t *testing.T) {
 	c := Default()
-	if len(c.Commands) < 60 {
-		t.Fatalf("only %d commands", len(c.Commands))
+	if len(c.All()) < 60 {
+		t.Fatalf("only %d commands", len(c.All()))
 	}
 	for _, name := range []string{"DeviceInformation", "InstallProfile", "InstallApplication", "EraseDevice", "Settings", "ScheduleOSUpdate"} {
 		if _, ok := c.Get(name); !ok {
@@ -90,9 +90,9 @@ func TestBuildProblems(t *testing.T) {
 
 func TestPlatformAndAllowedValues(t *testing.T) {
 	// A command that does not exist on a platform.
-	for _, c := range Default().Commands {
+	for _, c := range Default().All() {
 		if info, ok := c.OS["macOS"]; ok && info.Introduced == "n/a" {
-			if _, _, ps := c.Build(map[string]any{}, Options{Platform: "macOS"}); len(ps) == 0 {
+			if _, _, ps := Build(c, map[string]any{}, Options{Platform: "macOS"}); len(ps) == 0 {
 				t.Errorf("%s accepted on macOS", c.RequestType)
 			}
 			break
@@ -100,10 +100,10 @@ func TestPlatformAndAllowedValues(t *testing.T) {
 	}
 	// A value outside the allowed list.
 	checked := false
-	for _, c := range Default().Commands {
+	for _, c := range Default().All() {
 		for _, k := range c.Keys {
 			if k.Type == "string" && len(k.Allowed) > 0 && !k.Required {
-				_, _, ps := c.Build(map[string]any{k.Key: "definitely-not-allowed"}, Options{})
+				_, _, ps := Build(c, map[string]any{k.Key: "definitely-not-allowed"}, Options{})
 				found := false
 				for _, p := range ps {
 					found = found || strings.Contains(p.Message, "must be one of")
@@ -122,8 +122,8 @@ func TestPlatformAndAllowedValues(t *testing.T) {
 
 // Every command must build from the empty request or say what is missing (nothing may panic, whatever the schema holds).
 func TestEveryCommandBuilds(t *testing.T) {
-	for _, c := range Default().Commands {
-		out, _, ps := c.Build(map[string]any{}, Options{})
+	for _, c := range Default().All() {
+		out, _, ps := Build(c, map[string]any{}, Options{})
 		if len(ps) == 0 && !strings.Contains(string(out), c.RequestType) {
 			t.Errorf("%s: %s", c.RequestType, out)
 		}

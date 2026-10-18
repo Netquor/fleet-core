@@ -54,7 +54,7 @@ func TestEnrollEndToEnd(t *testing.T) {
 
 	srv, err := New(ctx, Config{
 		BaseURL: "https://mdm.test", Organization: "Test Org", ProfileIdentifier: "test.mdm.enroll", Topic: "com.apple.mgmt.External.test",
-		Storage: store, PKIDB: db, CAPass: "correct horse", CertSource: CertFromTLS, APIKey: "apikey", Version: "test",
+		Storage: store, PKIDB: db, CAPass: "correct horse", CertSource: CertFromTLS, APIKey: "apikey", Version: "test", NoFeeds: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -293,6 +293,74 @@ func TestEnrollEndToEnd(t *testing.T) {
 		if len(got.Devices) != 1 || got.Devices[0].Status != "Acknowledged" || qr["SerialNumber"] != "C02TEST" {
 			t.Errorf("results: %+v", got)
 		}
+	}
+
+	// 4c. Blueprints: a profile defined once reaches the enrolled Mac, which learned its platform from its Authenticate message.
+	runCtx, stopRun := context.WithCancel(ctx)
+	defer stopRun()
+	go srv.Run(runCtx)
+	api := func(method, path, body string) (int, string) {
+		req, _ := http.NewRequest(method, ts.URL+path, strings.NewReader(body))
+		req.SetBasicAuth("fleetcore", "apikey")
+		r, err := (&http.Client{Transport: &http.Transport{TLSClientConfig: insecure}}).Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer r.Body.Close()
+		b, _ := io.ReadAll(r.Body)
+		return r.StatusCode, string(b)
+	}
+	waitFor := func(what string, cond func() bool) {
+		for i := 0; i < 100; i++ {
+			if cond() {
+				return
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		t.Fatalf("timed out waiting for %s", what)
+	}
+	waitFor("the device in the inventory", func() bool {
+		code, b := api("GET", "/v1/devices/"+udid, "")
+		return code == 200 && strings.Contains(b, `"platform":"macOS"`)
+	})
+	wifiProfile := `<?xml version="1.0"?><plist version="1.0"><dict><key>PayloadType</key><string>Configuration</string><key>PayloadVersion</key><integer>1</integer><key>PayloadIdentifier</key><string>com.test.wifi</string><key>PayloadUUID</key><string>AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA</string><key>PayloadContent</key><array><dict><key>PayloadType</key><string>com.apple.wifi.managed</string><key>PayloadVersion</key><integer>1</integer><key>PayloadIdentifier</key><string>com.test.wifi.x</string><key>PayloadUUID</key><string>BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB</string><key>SSID_STR</key><string>corp</string></dict></array></dict></plist>`
+	bpBody, _ := json.Marshal(map[string]any{"id": "wifi", "name": "Wi-Fi", "enabled": true, "scope": map[string]any{"field": "platform", "op": "eq", "value": "macOS"},
+		"items": []any{map[string]any{"kind": "profile", "payload": []byte(wifiProfile)}}})
+	if code, b := api("POST", "/v1/blueprints", string(bpBody)); code != 201 {
+		t.Fatalf("create blueprint: %d %s", code, b)
+	}
+	if code, _ := api("POST", "/v1/blueprints", string(bpBody)); code != 409 {
+		t.Errorf("creating a blueprint twice got %d, want 409", code)
+	}
+	got := ""
+	for i := 0; i < 100 && got == ""; i++ {
+		code, b := post("/mdm", mdmCT, id, idle, false)
+		if code != 200 || len(strings.TrimSpace(b)) == 0 {
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+		var c struct {
+			CommandUUID string
+			Command     struct{ RequestType string }
+		}
+		if err := plist.Unmarshal([]byte(b), &c); err != nil {
+			t.Fatal(err)
+		}
+		reply := `<?xml version="1.0"?><plist version="1.0"><dict><key>CommandUUID</key><string>` + c.CommandUUID + `</string><key>Status</key><string>Acknowledged</string><key>UDID</key><string>` + udid + `</string></dict></plist>`
+		if c.Command.RequestType == "InstallProfile" {
+			got = c.CommandUUID
+		}
+		post("/mdm", mdmCT, id, reply, false)
+	}
+	if got == "" {
+		t.Fatal("the profile never reached the device")
+	}
+	waitFor("the blueprint to show the profile applied", func() bool {
+		_, b := api("GET", "/v1/blueprints/wifi/status", "")
+		return strings.Contains(b, `"applied":1`)
+	})
+	if code, b := api("GET", "/v1/schemas", ""); code != 200 || !strings.Contains(b, `"commands"`) {
+		t.Errorf("schemas: %d %s", code, b)
 	}
 
 	// 5. The management API wants its key; the CA certificate is public.

@@ -48,6 +48,7 @@ func main() {
 		tlsKey  = flag.String("tls-key", env("FLEETCORE_TLS_KEY", ""), "TLS key file")
 		acme    = flag.String("autocert", env("FLEETCORE_AUTOCERT", ""), "host name to get a Let's Encrypt certificate for (serves :443 and :80)")
 		acmeDir = flag.String("autocert-dir", env("FLEETCORE_AUTOCERT_DIR", "autocert-cache"), "directory that keeps autocert certificates")
+		noFeeds = flag.Bool("no-feeds", os.Getenv("FLEETCORE_NO_FEEDS") != "", "do not contact Apple's feeds (device-management schemas on GitHub, OS releases); use the built-in snapshot")
 		debug   = flag.Bool("debug", false, "log more")
 		showVer = flag.Bool("version", false, "print the version and exit")
 	)
@@ -79,7 +80,7 @@ func main() {
 	}
 	srv, err := server.New(ctx, server.Config{
 		BaseURL: *base, Organization: *org, Topic: *topic, Storage: store, PKIDB: mc.Database(*dbName), PKITenant: *tenant,
-		CAPass: *caPass, CertSource: server.CertSource(*source), CertHeader: *header, APIKey: *apiKey, Logger: logger, Debug: *debug, Version: version,
+		CAPass: *caPass, CertSource: server.CertSource(*source), CertHeader: *header, APIKey: *apiKey, Logger: logger, Debug: *debug, Version: version, NoFeeds: *noFeeds,
 	})
 	if err != nil {
 		fatal(logger, err)

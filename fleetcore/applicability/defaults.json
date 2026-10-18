@@ -1,0 +1,5 @@
+[
+ {"id": "chrome", "match": "com.google.Chrome*", "platforms": ["macOS"], "note": "Chrome reads managed preferences from a macOS preference domain; iOS uses managed app configuration instead."},
+ {"id": "edge", "match": "com.microsoft.Edge*", "platforms": ["macOS"], "note": "Edge managed preferences are a macOS preference domain."},
+ {"id": "firefox", "match": "org.mozilla.firefox*", "platforms": ["macOS"], "note": "Firefox enterprise policies apply to macOS."}
+]

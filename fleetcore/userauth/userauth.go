@@ -205,6 +205,14 @@ type Service struct {
 	Fallback service.UserAuthenticate
 	// TokenLife is how long an AuthToken lasts without another handshake (default 24 hours; a login session normally ends sooner and the next login makes a new token).
 	TokenLife time.Duration
+	// Observe, if set, is told each outcome: challenge, accepted, rejected or error (metrics).
+	Observe func(result string)
+}
+
+func (s *Service) note(r string) {
+	if s.Observe != nil {
+		s.Observe(r)
+	}
 }
 
 func plistBytes(v any) ([]byte, error) { return plist.MarshalIndent(v, "\t") }
@@ -228,9 +236,13 @@ func (s *Service) UserAuthenticate(r *mdm.Request, msg *mdm.UserAuthenticate) ([
 		if err != nil {
 			return nil, err
 		}
+		s.note("challenge")
 		return plistBytes(map[string]string{"DigestChallenge": fmt.Sprintf(`Digest nonce="%s",realm="%s"`, nonce, s.Realm)})
 	}
-	rejected := func() ([]byte, error) { return plistBytes(map[string]string{"AuthToken": ""}) }
+	rejected := func() ([]byte, error) {
+		s.note("rejected")
+		return plistBytes(map[string]string{"AuthToken": ""})
+	}
 	d, err := ParseDigest(msg.DigestResponse)
 	if err != nil {
 		return rejected()
@@ -266,6 +278,7 @@ func (s *Service) UserAuthenticate(r *mdm.Request, msg *mdm.UserAuthenticate) ([
 	if err != nil {
 		return nil, err
 	}
+	s.note("accepted")
 	return plistBytes(map[string]string{"AuthToken": token})
 }
 

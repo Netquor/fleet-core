@@ -299,6 +299,11 @@ func (s *Service) record(ctx context.Context, name string, resp *godep.FetchDevi
 
 func (s *Service) devicesHandler(prefix string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", "GET")
+			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+			return
+		}
 		name := r.URL.Path[len(prefix):]
 		f := s.scope(bson.D{{Key: "dep", Value: name}})
 		cur, err := s.db.Collection(devicesCollection).Find(r.Context(), f, options.Find().SetLimit(1000).SetSort(bson.D{{Key: "serial", Value: 1}}))

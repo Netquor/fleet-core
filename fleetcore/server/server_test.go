@@ -20,6 +20,7 @@ import (
 	"time"
 
 	kitlog "github.com/go-kit/kit/log"
+	"github.com/micromdm/nanomdm/fleetcore/metrics"
 	"github.com/micromdm/nanomdm/fleetcore/seal"
 	"github.com/micromdm/nanomdm/fleetcore/tenantlint"
 	"github.com/micromdm/nanomdm/storage/mongodb"
@@ -77,7 +78,7 @@ func TestEnrollEndToEnd(t *testing.T) {
 
 	srv, err := New(ctx, Config{
 		BaseURL: "https://mdm.test", Organization: "Test Org", ProfileIdentifier: "test.mdm.enroll", Topic: "com.apple.mgmt.External.test",
-		Storage: store, PKIDB: mc.Database("fleetcore_test"), PKITenant: "acme", CAPass: "correct horse", CertSource: CertFromTLS, APIKey: "apikey", Version: "test", NoFeeds: true, Sealer: ring.For("acme"), Migration: true, APIKeys: map[string]string{"alice": "alice-secret-key-123"},
+		Storage: store, PKIDB: mc.Database("fleetcore_test"), PKITenant: "acme", CAPass: "correct horse", CertSource: CertFromTLS, APIKey: "apikey", Version: "test", NoFeeds: true, Sealer: ring.For("acme"), Migration: true, Metrics: metrics.New("test"), MetricsToken: "scrape-token-1234", APIKeys: map[string]string{"alice": "alice-secret-key-123"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -569,6 +570,40 @@ func TestEnrollEndToEnd(t *testing.T) {
 	})
 	if code, b := api("GET", "/v1/events/types", ""); code != 200 || !strings.Contains(b, "command.result") {
 		t.Errorf("event types: %d %.200s", code, b)
+	}
+	// metrics: the scraper's token or the management login, nothing else
+	scrape := func(setup func(*http.Request)) (int, string) {
+		req, _ := http.NewRequest("GET", ts.URL+"/metrics", nil)
+		setup(req)
+		r, err := (&http.Client{Transport: &http.Transport{TLSClientConfig: insecure}}).Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer r.Body.Close()
+		b, _ := io.ReadAll(r.Body)
+		return r.StatusCode, string(b)
+	}
+	if code, _ := scrape(func(r *http.Request) {}); code != 401 {
+		t.Errorf("metrics without credentials: %d", code)
+	}
+	if code, _ := scrape(func(r *http.Request) { r.Header.Set("Authorization", "Bearer nope") }); code != 401 {
+		t.Errorf("metrics with a wrong token: %d", code)
+	}
+	waitFor("the database metrics", func() bool {
+		code, b := scrape(func(r *http.Request) { r.Header.Set("Authorization", "Bearer scrape-token-1234") })
+		return code == 200 && strings.Contains(b, "fleetcore_enrollments{") && strings.Contains(b, "fleetcore_devices{")
+	})
+	_, mb := scrape(func(r *http.Request) { r.SetBasicAuth("x", "apikey") })
+	for _, want := range []string{"fleetcore_http_requests_total{", "fleetcore_mdm_messages_total{result=\"ok\",type=\"Authenticate\"}", "fleetcore_command_queue", "fleetcore_blueprints{", "fleetcore_certificate_expires_in_seconds{kind=\"device_identity_ca\"",
+		"fleetcore_scrape_collector_success{collector=\"devices\"} 1", "fleetcore_events_produced_total{", "fleetcore_build_info{", "fleetcore_admin_auth_total{method=\"key\",result=\"ok\"", "fleetcore_event_log_last_sequence", "fleetcore_schema_snapshot_timestamp_seconds"} {
+		if !strings.Contains(mb, want) {
+			t.Errorf("metrics lack %s", want)
+		}
+	}
+	for _, bad := range []string{"scrape-token", "apikey", "alice-secret"} {
+		if strings.Contains(mb, bad) {
+			t.Errorf("a secret appears in the metrics: %s", bad)
+		}
 	}
 	if code, b := api("GET", "/v1/ddm/translate/coverage", ""); code != 200 || !strings.Contains(b, "com.apple.mail.managed") {
 		t.Errorf("translate coverage: %d %.300s", code, b)

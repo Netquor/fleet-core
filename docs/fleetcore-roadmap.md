@@ -154,4 +154,5 @@ Everything in the earlier plan is built. What is left, honestly:
 2. **Translator**: always-on VPN, TCC privacy (the schemas do not describe the mapping), and the restrictions Apple has not given a declaration yet (the coverage report lists them). Content types and the shared-secret credential form are chosen from Apple's schemas and unverified on a device.
 3. **Migration**: in-place migration works from NanoMDM-family servers. Other MDMs cannot move enrollments (they belong to the old push certificate and identity); their device lists import, but there is no reader for any product's API, only CSV and JSON.
 4. **Platform SSO presets** for vendors other than Entra, Okta and PingID (Jamf Connect's identifiers were not found in a source to trust).
-5. **Event relay**: no event for every change; add types in `fleetcore/relay` as consumers need them.
+5. **Events**: 24 types; add more in `fleetcore/relay/mapping.go` as consumers need them. Subscriptions are webhooks only (NATS and one webhook are static sinks).
+6. **Metrics**: Prometheus text only, no ready-made dashboards (alert rules are in `deploy/fleetcore`).

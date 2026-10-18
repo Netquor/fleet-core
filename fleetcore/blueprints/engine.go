@@ -84,6 +84,8 @@ type Engine struct {
 	// OnDEPDevice, if set, is told of each device Apple assigns to (or takes from) this server, before it enrolls. Work that can be done in advance (licensing an app to the serial
 	// number) hangs here. removed is true when Apple took the device back.
 	OnDEPDevice func(ctx context.Context, d DEPDevice, removed bool)
+	// Observe, if set, is told how long each device's reconcile took and whether it failed (metrics).
+	Observe func(d time.Duration, err error)
 	// Organization names the organization to devices (the organization-info management declaration); empty sends none.
 	Organization string
 	// BaseURL is the server's public address; legacy-profile declarations point devices at it. Without it profiles are always delivered as MDM profiles.
@@ -192,7 +194,11 @@ func (e *Engine) Once(ctx context.Context) bool {
 	if d == nil {
 		return false
 	}
+	started := time.Now()
 	next, err := e.Reconcile(ctx, d)
+	if e.Observe != nil {
+		e.Observe(time.Since(started), err)
+	}
 	if err != nil {
 		e.Logger.Info("msg", "reconcile", "device", d.ID, "err", err)
 		next = now.Add(time.Minute)

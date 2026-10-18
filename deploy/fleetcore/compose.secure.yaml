@@ -32,6 +32,8 @@ services:
       FLEETCORE_TOPIC: ${FLEETCORE_TOPIC:-}
       FLEETCORE_CERT_SOURCE: signature
       FLEETCORE_API_KEY: ${FLEETCORE_API_KEY:?set a long random API key}
+      FLEETCORE_ENROLL_SECRET: ${FLEETCORE_ENROLL_SECRET:?set a code people need to download the enrollment profile (or use FLEETCORE_ENROLL_OPEN=1 instead)}
+      FLEETCORE_METRICS_TOKEN: ${FLEETCORE_METRICS_TOKEN:-}   # bearer token for a Prometheus scraper at /metrics
       # This server holds its tenant's key only (from: fleetcore tenant-key -tenant acme), never the master key.
       FLEETCORE_TENANT_KEYS: ${FLEETCORE_TENANT_KEYS:?run: fleetcore tenant-key -tenant acme}
       FLEETCORE_TENANT: acme

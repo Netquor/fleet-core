@@ -159,16 +159,17 @@ func (s *Store) Events(ctx context.Context, after int64, types []string, key str
 	return out, nil
 }
 
-// LastSeq is the newest sequence number (0 when there are no events).
+// LastSeq is the newest sequence number that is in the log (0 when there are none). It is the largest stored number, not the counter: the counter runs ahead of an event for a moment
+// while it is being written, and a consumer that moved its cursor to the counter could skip that event.
 func (s *Store) LastSeq(ctx context.Context) (int64, error) {
-	var ctr struct {
-		N int64 `bson:"n"`
+	var d struct {
+		Seq int64 `bson:"seq"`
 	}
-	err := s.db.Collection("relay_state").FindOne(ctx, bson.D{{Key: "_id", Value: s.key("seq")}}).Decode(&ctr)
+	err := s.db.Collection("relay_events").FindOne(ctx, s.scope(bson.D{}), options.FindOne().SetSort(bson.D{{Key: "seq", Value: -1}}).SetProjection(bson.D{{Key: "seq", Value: 1}})).Decode(&d)
 	if errors.Is(err, mongo.ErrNoDocuments) {
 		return 0, nil
 	}
-	return ctr.N, err
+	return d.Seq, err
 }
 
 func regexQuote(s string) string {

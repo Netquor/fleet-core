@@ -31,6 +31,7 @@ import (
 	"github.com/micromdm/nanomdm/fleetcore/ddm"
 	"github.com/micromdm/nanomdm/fleetcore/dep"
 	"github.com/micromdm/nanomdm/fleetcore/enroll"
+	"github.com/micromdm/nanomdm/fleetcore/metrics"
 	"github.com/micromdm/nanomdm/fleetcore/osreleases"
 	"github.com/micromdm/nanomdm/fleetcore/pki"
 	"github.com/micromdm/nanomdm/fleetcore/relay"
@@ -43,6 +44,7 @@ import (
 	httpapi "github.com/micromdm/nanomdm/http/api"
 	httpmdm "github.com/micromdm/nanomdm/http/mdm"
 	"github.com/micromdm/nanomdm/mdm"
+	"github.com/micromdm/nanomdm/push"
 	"github.com/micromdm/nanomdm/push/nanopush"
 	pushsvc "github.com/micromdm/nanomdm/push/service"
 	"github.com/micromdm/nanomdm/service"
@@ -132,6 +134,9 @@ type Config struct {
 	ADERoots *x509.CertPool
 	// VPPBaseURL and AppStoreLookupURL override Apple's Apps and Books and App Store catalog endpoints (tests).
 	VPPBaseURL, AppStoreLookupURL string
+	// Metrics, if set, instruments the server and serves /metrics (Prometheus text) behind the management login, or a bearer MetricsToken for the scraper.
+	Metrics      *metrics.Metrics
+	MetricsToken string
 	// RelaySinks receive the events (NATS, a webhook...) in addition to the event log and the subscriptions, which are always on with the management API.
 	RelaySinks []relay.Sink
 	// RelayHooks lets a metrics layer watch the relay.
@@ -310,7 +315,11 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		if err != nil {
 			return nil, err
 		}
-		uaService = &userauth.Service{Store: uaStore, Realm: ua.Realm, Directory: ua.Directory, Verifier: ua.Verifier, Messages: cfg.Storage, Fallback: uaService}
+		uas := &userauth.Service{Store: uaStore, Realm: ua.Realm, Directory: ua.Directory, Verifier: ua.Verifier, Messages: cfg.Storage, Fallback: uaService}
+		if cfg.Metrics != nil {
+			uas.Observe = cfg.Metrics.UserAuth
+		}
+		uaService = uas
 		uaEnforcer = &userauth.Enforcer{Store: uaStore, Require: ua.RequireToken}
 	}
 	nano := nanomdm.New(cfg.Storage,
@@ -323,6 +332,10 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		popts = append(popts, nanopush.WithPushServerURL(cfg.PushURL))
 	}
 	ps := pushsvc.New(cfg.Storage, cfg.Storage, nanopush.NewFactory(popts...), logger.With("service", "push"))
+	var pusher push.Pusher = ps
+	if cfg.Metrics != nil {
+		pusher = cfg.Metrics.WrapPusher(ps)
+	}
 
 	// ---- blueprints: desired state, kept true by a reconciler that learns of devices from check-ins ----
 	bpStore, err := blueprints.NewStore(ctx, cfg.PKIDB, cfg.PKITenant)
@@ -343,11 +356,14 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	if err := schemaFeed.Load(ctx); err != nil {
 		return nil, fmt.Errorf("schemas: %w", err)
 	}
-	pe, err := nanoapi.NewPushEnqueuer(cfg.Storage, ps, nanoapi.WithLogger(logger.With("service", "blueprints")))
+	pe, err := nanoapi.NewPushEnqueuer(cfg.Storage, pusher, nanoapi.WithLogger(logger.With("service", "blueprints")))
 	if err != nil {
 		return nil, err
 	}
 	engine := blueprints.New(bpStore, pushEnqueuer{pe}, profileRules, catalog, logger.With("service", "blueprints"), blueprints.Config{})
+	if cfg.Metrics != nil {
+		engine.Observe = cfg.Metrics.Reconciled
+	}
 	vaultStore, err := vault.NewStore(ctx, cfg.PKIDB, cfg.PKITenant)
 	if err != nil {
 		return nil, fmt.Errorf("vault: %w", err)
@@ -412,6 +428,9 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	}
 	migrationService := mdmService
 	mdmService = certauth.New(mdmService, cfg.Storage, certOpts...)
+	if cfg.Metrics != nil {
+		mdmService = cfg.Metrics.WrapService(mdmService)
+	}
 
 	mux := http.NewServeMux()
 	mdmAuth := nlhttp.NewMWMux(mux)
@@ -511,8 +530,14 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	adminAuth := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			who := ""
+			denied := func() {
+				if cfg.Metrics != nil {
+					cfg.Metrics.AdminAuth(false, "none")
+				}
+			}
 			if cfg.AdminCA != nil {
 				if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
+					denied()
 					http.Error(w, "a client certificate is required", http.StatusUnauthorized)
 					return
 				}
@@ -522,6 +547,7 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 					inter.AddCert(c)
 				}
 				if _, err := leaf.Verify(x509.VerifyOptions{Roots: cfg.AdminCA, Intermediates: inter, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}}); err != nil {
+					denied()
 					http.Error(w, "the client certificate is not accepted", http.StatusUnauthorized)
 					return
 				}
@@ -542,6 +568,7 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 					}
 				}
 				if name == "" {
+					denied()
 					w.Header().Set("WWW-Authenticate", `Basic realm="fleetcore"`)
 					http.Error(w, "unauthorized", http.StatusUnauthorized)
 					return
@@ -553,13 +580,44 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 			if actor := r.Header.Get("X-Actor"); actor != "" && who != "" { // a control plane names the person it acts for
 				who += " (" + actor + ")"
 			}
+			if cfg.Metrics != nil {
+				method := "key"
+				if cfg.AdminCA != nil {
+					method = "certificate"
+				}
+				cfg.Metrics.AdminAuth(true, method)
+			}
 			logger.Info("msg", "admin api", "who", who, "method", r.Method, "path", r.URL.Path)
 			next.ServeHTTP(w, r.WithContext(admin.With(r.Context(), who)))
 		})
 	}
 
 	// ---- management API ----
+	if cfg.Metrics != nil {
+		// Prometheus scrapes with a bearer token (-metrics-token), or with the management login.
+		mh := cfg.Metrics.Handler()
+		login := adminAuth(mh)
+		mux.Handle("/metrics", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if tok := cfg.MetricsToken; tok != "" {
+				if a := r.Header.Get("Authorization"); strings.HasPrefix(a, "Bearer ") && subtle.ConstantTimeCompare([]byte(strings.TrimPrefix(a, "Bearer ")), []byte(tok)) == 1 {
+					mh.ServeHTTP(w, r)
+					return
+				}
+			}
+			if cfg.APIKey == "" && len(cfg.APIKeys) == 0 && cfg.AdminCA == nil && cfg.MetricsToken == "" {
+				http.NotFound(w, r) // no way to log in: the endpoint does not exist
+				return
+			}
+			if cfg.APIKey == "" && len(cfg.APIKeys) == 0 && cfg.AdminCA == nil {
+				w.Header().Set("WWW-Authenticate", `Bearer realm="fleetcore"`)
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			login.ServeHTTP(w, r)
+		}))
+	}
 	var depSvc *dep.Service
+	var evStore *relay.Store
 	var eventRelay *relay.Relay
 	var eventDispatcher *relay.Dispatcher
 	if cfg.APIKey != "" || len(cfg.APIKeys) > 0 || cfg.AdminCA != nil {
@@ -597,7 +655,7 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 
 		apiAuth := nlhttp.NewMWMux(mux)
 		apiAuth.Use(func(h http.Handler) http.Handler { return adminAuth(h) })
-		httpapi.HandleAPIv1("/v1", apiAuth, logger, cfg.Storage, ps)
+		httpapi.HandleAPIv1("/v1", apiAuth, logger, cfg.Storage, pusher)
 
 		if cfg.Migration {
 			migrate := httpmdm.CheckinHandler(migrationService, logger.With("handler", "migration"))
@@ -626,7 +684,7 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 				mux.Handle(p, lh)
 			}
 		}
-		ch, err := commands.Handler("/v1/commands", commands.Default(), cfg.Storage, ps, results, cl, logger.With("handler", "commands"))
+		ch, err := commands.Handler("/v1/commands", commands.Default(), cfg.Storage, pusher, results, cl, logger.With("handler", "commands"))
 		if err != nil {
 			return nil, fmt.Errorf("command api: %w", err)
 		}
@@ -651,11 +709,15 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		wfAPI := &workflows.API{S: wf, Bootstrap: bootstrap}
 		bpHandler := adminAuth(http.StripPrefix("/v1", wfAPI.Handler(bpAPI.Handler())))
 		// ---- events: the log, the sinks, subscriptions ----
-		evStore, err := relay.NewStore(ctx, cfg.PKIDB, cfg.PKITenant, sealer)
+		evStore, err = relay.NewStore(ctx, cfg.PKIDB, cfg.PKITenant, sealer)
 		if err != nil {
 			return nil, fmt.Errorf("events: %w", err)
 		}
-		eventRelay = &relay.Relay{DB: cfg.PKIDB, Tenant: cfg.PKITenant, Store: evStore, Sinks: cfg.RelaySinks, Hooks: cfg.RelayHooks, Logger: logger.With("service", "relay")}
+		hooks := cfg.RelayHooks
+		if cfg.Metrics != nil {
+			hooks = cfg.Metrics.RelayHooks()
+		}
+		eventRelay = &relay.Relay{DB: cfg.PKIDB, Tenant: cfg.PKITenant, Store: evStore, Sinks: cfg.RelaySinks, Hooks: hooks, Logger: logger.With("service", "relay")}
 		eventDispatcher = &relay.Dispatcher{Relay: eventRelay, Store: evStore, Client: relay.SafeClient(cfg.EventsAllowPrivate)}
 		evHandler := adminAuth(http.StripPrefix("/v1", (&relay.API{Store: evStore, Dispatcher: eventDispatcher, AllowPrivate: cfg.EventsAllowPrivate}).Handler()))
 		for _, p := range []string{"/v1/events", "/v1/events/", "/v1/event-subscriptions", "/v1/event-subscriptions/"} {
@@ -666,7 +728,12 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		}
 	}
 
-	return &Server{Relay: eventRelay, Dispatcher: eventDispatcher, Handler: trace.NewTraceLoggingHandler(mux, logger.With("handler", "log"), newTraceID), CAPool: pool, Depot: depot, DEP: depSvc, Blueprints: engine, sealer: sealer, bpStore: bpStore, ddmStore: ddmStore, releases: relFeed, schemaFeed: schemaFeed, cfg: cfg}, nil
+	var handler http.Handler = trace.NewTraceLoggingHandler(mux, logger.With("handler", "log"), newTraceID)
+	if cfg.Metrics != nil {
+		cfg.Metrics.Registry.MustRegister(&metrics.DB{Database: cfg.PKIDB, Tenant: cfg.PKITenant, Releases: catalog, Relay: evStore})
+		handler = cfg.Metrics.Middleware(handler)
+	}
+	return &Server{Relay: eventRelay, Dispatcher: eventDispatcher, Handler: handler, CAPool: pool, Depot: depot, DEP: depSvc, Blueprints: engine, sealer: sealer, bpStore: bpStore, ddmStore: ddmStore, releases: relFeed, schemaFeed: schemaFeed, cfg: cfg}, nil
 }
 
 // TLSConfig for a listener that terminates TLS here: the given certificate (a public one devices trust), and a request for a client certificate, which is checked by the MDM handlers

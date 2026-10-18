@@ -1,0 +1,110 @@
+# Alerting rules for fleetcore's metrics. Load them in Prometheus (rule_files) and adjust the thresholds to your fleet.
+#
+#   scrape_configs:
+#     - job_name: fleetcore
+#       scheme: https
+#       authorization: { credentials_file: /etc/prometheus/fleetcore-metrics-token }   # -metrics-token
+#       static_configs: [{ targets: ["mdm.example.com"] }]
+groups:
+  - name: fleetcore-certificates
+    rules:
+      - alert: FleetcoreCertificateExpiresSoon
+        expr: fleetcore_certificate_expires_in_seconds < 30 * 86400
+        for: 1h
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.kind }} {{ $labels.name }} expires in {{ $value | humanizeDuration }}"
+          description: "The APNs push certificate, the DEP token, the Apps and Books token and the device identity CA all stop devices from being managed when they expire."
+      - alert: FleetcoreCertificateExpiresVerySoon
+        expr: fleetcore_certificate_expires_in_seconds < 7 * 86400
+        labels: { severity: critical }
+        annotations: { summary: "{{ $labels.kind }} {{ $labels.name }} expires in {{ $value | humanizeDuration }}" }
+      - alert: FleetcoreIdentityCertificatesExpiring
+        expr: fleetcore_identity_certificates_expiring{within="30d"} > 0
+        for: 1h
+        labels: { severity: warning }
+        annotations: { summary: "{{ $value }} device identity certificates expire within 30 days" }
+
+  - name: fleetcore-service
+    rules:
+      - alert: FleetcoreDown
+        expr: up{job="fleetcore"} == 0
+        for: 5m
+        labels: { severity: critical }
+        annotations: { summary: "fleetcore cannot be scraped" }
+      - alert: FleetcoreCollectorFailing
+        expr: fleetcore_scrape_collector_success == 0
+        for: 10m
+        labels: { severity: warning }
+        annotations: { summary: "the {{ $labels.collector }} collector keeps failing (is MongoDB slow or refusing a query?)" }
+      - alert: FleetcoreMongoSlow
+        expr: fleetcore_mongodb_ping_seconds > 0.5
+        for: 10m
+        labels: { severity: warning }
+        annotations: { summary: "MongoDB takes {{ $value }}s to answer a ping" }
+      - alert: FleetcoreServerErrors
+        expr: sum(rate(fleetcore_http_requests_total{code=~"5.."}[5m])) / sum(rate(fleetcore_http_requests_total[5m])) > 0.02
+        for: 10m
+        labels: { severity: warning }
+        annotations: { summary: "more than 2% of requests fail with a 5xx" }
+      - alert: FleetcoreAdminAuthFailures
+        expr: sum(rate(fleetcore_admin_auth_total{result="denied"}[10m])) > 0.2
+        for: 10m
+        labels: { severity: warning }
+        annotations: { summary: "repeated failed logins to the management API" }
+
+  - name: fleetcore-fleet
+    rules:
+      - alert: FleetcoreReconcileBacklog
+        expr: fleetcore_reconcile_queue_oldest_due_age_seconds > 900
+        for: 10m
+        labels: { severity: warning }
+        annotations: { summary: "devices have waited {{ $value | humanizeDuration }} for blueprints to be applied" }
+      - alert: FleetcoreCommandsNotAnswered
+        expr: fleetcore_command_queue_oldest_unanswered_age_seconds > 6 * 3600
+        for: 30m
+        labels: { severity: info }
+        annotations: { summary: "the oldest queued command has waited {{ $value | humanizeDuration }} (devices offline, or push not reaching them)" }
+      - alert: FleetcorePushFailures
+        expr: rate(fleetcore_push_notifications_total{result="failed"}[10m]) > 0.1
+        for: 10m
+        labels: { severity: warning }
+        annotations: { summary: "APNs pushes are failing" }
+      - alert: FleetcoreApplicationsGivenUp
+        expr: fleetcore_blueprint_applications_given_up > 0
+        for: 1h
+        labels: { severity: warning }
+        annotations: { summary: "{{ $value }} blueprint items failed and used up their retries" }
+      - alert: FleetcoreManyDevicesOutOfDate
+        expr: sum(fleetcore_devices_os_currency{state="behind_in_major"}) / sum(fleetcore_devices_os_currency) > 0.25
+        for: 6h
+        labels: { severity: info }
+        annotations: { summary: "over a quarter of devices are behind on their OS" }
+      - alert: FleetcoreDevicesGoneQuiet
+        expr: fleetcore_devices_not_seen{period="7d"} > 0
+        for: 1d
+        labels: { severity: info }
+        annotations: { summary: "{{ $value }} active devices have not checked in for a week" }
+
+  - name: fleetcore-events
+    rules:
+      - alert: FleetcoreSubscriptionFailing
+        expr: fleetcore_event_subscription_consecutive_failures > 5
+        for: 10m
+        labels: { severity: warning }
+        annotations: { summary: "event subscription {{ $labels.name }} ({{ $labels.subscription }}) fails to deliver" }
+      - alert: FleetcoreSubscriptionPaused
+        expr: fleetcore_event_subscriptions{state="paused"} > 0
+        for: 5m
+        labels: { severity: warning }
+        annotations: { summary: "an event subscription paused itself after repeated failures; resume it once the endpoint is back" }
+      - alert: FleetcoreSubscriptionBehind
+        expr: fleetcore_event_subscription_lag_events > 5000
+        for: 15m
+        labels: { severity: warning }
+        annotations: { summary: "subscription {{ $labels.subscription }} is {{ $value }} events behind; the log keeps only seven days" }
+      - alert: FleetcoreSinkFailing
+        expr: rate(fleetcore_event_sink_publishes_total{result="error"}[10m]) > 0
+        for: 10m
+        labels: { severity: warning }
+        annotations: { summary: "the {{ $labels.sink }} event sink is refusing events (they are retried, and later events wait)" }

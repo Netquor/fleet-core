@@ -37,8 +37,12 @@ Written from the code (`fleetcore/server/server.go` and the packages it mounts) 
   - [Apps and Books (VPP)](#apps-and-books-vpp)
   - [Migration](#migration)
   - [NanoMDM's own API](#nanomdms-own-api)
+- [Events and subscriptions](#events-and-subscriptions)
+  - [The event](#the-event)
+  - [Subscriptions](#subscriptions)
+- [Metrics](#metrics)
 - [What fleetcore calls: events and bridges](#what-fleetcore-calls-events-and-bridges)
-  - [Event relay (`-relay-nats`, `-relay-webhook`)](#event-relay--relay-nats--relay-webhook)
+  - [Event sinks (`-relay-nats`, `-relay-webhook`)](#event-sinks--relay-nats--relay-webhook)
   - [MicroMDM-compatible webhook (embedding only)](#micromdm-compatible-webhook-embedding-only)
   - [UserAuthenticate bridge (`-ua-verify-url`)](#userauthenticate-bridge--ua-verify-url)
   - [Apple services fleetcore calls](#apple-services-fleetcore-calls)
@@ -60,7 +64,7 @@ The management API is mounted only when the server has an API key (`-api-key` / 
 
 | Configured | Requirement | Failure |
 |---|---|---|
-| API key only | HTTP Basic auth. The password must equal the API key (constant-time compare). The documented user name is `fleetcore`, but the code ignores the user name and checks only the password. | `401`, `WWW-Authenticate: Basic realm="fleetcore"`, body `unauthorized` |
+| API key only | HTTP Basic auth. The password must equal the API key (constant-time compare). The user name is ignored; the password is matched against `-api-key` and against every key in `-api-keys` (`name:key,name:key`). A call is logged and audited under the name of the key it used (`api key` for `-api-key`, `key <name>` for a named one), so give each person or system its own key. | `401`, `WWW-Authenticate: Basic realm="fleetcore"`, body `unauthorized` |
 | `-admin-ca` only | A TLS client certificate that chains to the admin CA, with the client-auth extended key usage. | `401` `a client certificate is required` (none presented, or the request did not arrive over TLS) or `401` `the client certificate is not accepted` |
 | Both | Both are required: the certificate check runs first, then the key check. | as above |
 
@@ -89,7 +93,7 @@ The MDM endpoints (`/mdm`, `/checkin`, `/ddm/profile/`, `/ddm/asset/`) identify 
 | `signature` | The `Mdm-Signature` header: a base64 CMS detached signature of the request body made by the device with its identity key; the certificate is taken from the signature. A failed verification answers `400`. A request with no `Mdm-Signature` carries no certificate. | TLS ends in front of the server (a CDN or proxy that does not forward the client certificate). | `SignMessage` true |
 | `header` | A header named by `-cert-header`: either an RFC 9440 value (`:base64-DER:`, recognized by a leading colon) or a URL-query-escaped PEM (nginx `$ssl_client_escaped_cert`). An unparsable or empty header carries no certificate. | A trusted proxy verifies TLS and forwards the certificate. | `SignMessage` false |
 
-Defaults differ: `cmd/fleetcore` defaults `-cert-source` to `tls`; `server.Config.CertSource`, when empty, defaults to `signature`. `header` requires `-cert-header` or startup fails.
+Both `cmd/fleetcore` and `server.Config` default `-cert-source` to `tls`. `header` requires `-cert-header` or startup fails.
 
 After extraction, `CertVerifyMiddleware` verifies the certificate against the device-identity CA (plus `-migrate-ca` CAs while migrating) with client-auth key usage. A missing or invalid certificate answers `400` (never `401`, deliberately: a 401 can make a device unenroll). Then the `certauth` service ties the certificate hash to the enrollment ID on the first `Authenticate` check-in and rejects a different certificate for an existing enrollment (`Config.AllowRetroactive` lets a device that enrolled before certificates were checked be associated later; no CLI flag sets it). `/ddm/profile/` and `/ddm/asset/` additionally require the certificate to map to a known enrollment, else `400`.
 
@@ -162,6 +166,8 @@ curl -o ca.pem https://mdm.example.com/ca.pem
 
 ### Enrollment profile endpoints
 
+**Who may download a profile.** `/enroll` is closed unless the server was started with `-enroll-secret CODE` (the code is given as `?code=CODE`, as a Bearer token, or as the Basic-auth password), `-enroll-auth-url URL` (a forward-auth gate: the request's headers go to the URL and a 2xx answer lets it through, so a proxy or an identity provider decides), or `-enroll-open` (anyone who can reach the server). With none of them the endpoint answers `403` and the server logs why at start-up. `/enroll/ade` and `/enroll/byod` authenticate the device or the person themselves and are not affected.
+
 All profile endpoints build the same two-payload profile (`fleetcore/enroll/profile.go`): an identity payload and a `com.apple.mdm` payload. Every copy carries a fresh one-use SCEP challenge (valid 24 hours by default (`Config.ChallengeTTL`), stored only as a hash; used up on first successful use at `/scep`). Responses carry `Cache-Control: no-store`.
 
 Profile contents:
@@ -170,7 +176,7 @@ Profile contents:
 |---|---|
 | `com.apple.security.scep` (identity) | `URL` = `<base>/scep`; `Challenge` = one-use password; subject `O=<organization>`, `CN=%HardwareUUID%` (BYOD: `ue-<random>`); RSA 2048; key usage 5; `Retries` 3, `RetryDelay` 10 |
 | `com.apple.security.acme` (identity, instead of SCEP, only when ACME is configured with `ForEnrollment`) | `DirectoryURL` = `<base>/acme/directory`; `KeyType` `ECSECPrimeRandom`, `KeySize` 384, `HardwareBound` true, `Attest` true; no challenge |
-| `com.apple.mdm` | `ServerURL` = `<base>/mdm`; `CheckInURL` = `<base>/checkin` only when `Config.SeparateCheckin` is set (no CLI flag; embedding programs only); `Topic` = APNs topic; `SignMessage` true only for `CertSource=signature`; `AccessRights` 8191 (removed for BYOD); `CheckOutWhenRemoved` true; `ServerCapabilities`: `com.apple.mdm.per-user-connections`, `com.apple.mdm.bootstraptoken`, `com.apple.mdm.token`; BYOD adds `EnrollmentMode` `BYOD` and `AssignedManagedAppleID` |
+| `com.apple.mdm` | `ServerURL` = `<base>/mdm`; `CheckInURL` = `<base>/checkin` only when `-separate-checkin` (`Config.SeparateCheckin`) is set; `Topic` = APNs topic; `SignMessage` true only for `CertSource=signature`; `AccessRights` 8191 (removed for BYOD); `CheckOutWhenRemoved` true; `ServerCapabilities`: `com.apple.mdm.per-user-connections`, `com.apple.mdm.bootstraptoken`, `com.apple.mdm.token`; BYOD adds `EnrollmentMode` `BYOD` and `AssignedManagedAppleID` |
 
 If the profile is under-configured (no topic, identifier, server or SCEP URL) the endpoint answers `503` with the reason.
 
@@ -253,7 +259,7 @@ Surprise: the serial must already be in the local device list, which the syncer 
 | Implementation | the `micromdm/scep` server mounted at exactly `/scep` |
 | Operations | `GET /scep?operation=GetCACaps`, `GET /scep?operation=GetCACert`, `GET /scep?operation=PKIOperation&message=<base64>`, `POST /scep?operation=PKIOperation` with the PKCS#7 message as the body |
 | Auth | the CSR must carry a valid challenge password. The challenge is checked and consumed with `FindOneAndDelete` (live, one use). A missing, expired or already used challenge fails the PKIOperation with a SCEP failure response. |
-| Issued certificate | signed by the server CA, validity `Config.SCEPValidityDays` (default 365; no CLI flag), client-auth usage; renewal within the validity window is not allowed (`WithAllowRenewalDays(0)`) |
+| Issued certificate | signed by the server CA, validity `Config.SCEPValidityDays` (default 365; `-scep-validity-days`), client-auth usage; renewal within the validity window is not allowed (`WithAllowRenewalDays(0)`) |
 | Response | per SCEP: `application/x-x509-ca-cert` or `application/x-x509-ca-ra-cert` for `GetCACert`, the capability list for `GetCACaps`, `application/x-pki-message` for `PKIOperation` |
 
 Body limits, status codes and failure encoding come from the SCEP library; fleetcore adds none.
@@ -264,7 +270,7 @@ Body limits, status codes and failure encoding come from the SCEP library; fleet
 
 | | |
 |---|---|
-| Purpose | The MDM server URL (`ServerURL`). One endpoint carries check-in messages and the command/result exchange unless `Config.SeparateCheckin` is set (no CLI flag). |
+| Purpose | The MDM server URL (`ServerURL`). One endpoint carries check-in messages and the command/result exchange unless `-separate-checkin` (`Config.SeparateCheckin`) is set. |
 | Caller | an enrolled device (after APNs wakes it, or on its own for check-ins). |
 | Auth | device identity certificate per `CertSource`, verified against the device CA (see conventions). Failures answer `400`. |
 | Routing | A request whose `Content-Type` starts with `application/x-apple-aspen-mdm-checkin` is a check-in; anything else is a command exchange. |
@@ -279,13 +285,13 @@ Body limits, status codes and failure encoding come from the SCEP library; fleet
 | 400 | plist did not parse, or the certificate is missing, invalid or does not match the enrollment (the check is deliberately never a 401) |
 | 500 | any other processing error |
 
-Services chained per request: the NanoMDM service, the blueprint observer (inventory and results), an optional outbound webhook (`Config.WebhookURL`, no CLI flag; `-relay-webhook` is the separate relay), and the `certauth` guard. When user authentication is configured (`-ua-realm`), `TokenUpdate` and command results on the user channel are refused if the `AuthToken` check fails.
+Services chained per request: the NanoMDM service, the blueprint observer (inventory and results), an optional outbound webhook (`-webhook-url`, MicroMDM-style; `-relay-webhook` is the separate event relay), and the `certauth` guard. When user authentication is configured (`-ua-realm`), `TokenUpdate` and command results on the user channel are refused if the `AuthToken` check fails.
 
 `GetToken` for service type `com.apple.maid` returns a Managed Apple Account JWT signed with the DEP name's token-exchange key (`-maid-dep` chooses the name; empty uses the only one, and with several names the request fails).
 
 #### `POST /checkin`
 
-Same handler family as `/mdm`, mounted only when `Config.SeparateCheckin` is set (no CLI flag; the stock binary never serves it): `/checkin` takes check-in messages and `/mdm` takes command exchanges. The enrollment profile then carries `CheckInURL=<base>/checkin`. Authentication, statuses and bodies are as for `/mdm`.
+Same handler family as `/mdm`, mounted only when `-separate-checkin` is set: `/checkin` takes check-in messages and `/mdm` takes command exchanges. The enrollment profile then carries `CheckInURL=<base>/checkin`. Authentication, statuses and bodies are as for `/mdm`.
 
 ### Declarative management
 
@@ -504,8 +510,8 @@ curl -u fleetcore:$API_KEY -X PUT --data-binary @token.p7m 'https://mdm.example.
 
 | | |
 |---|---|
-| Response | `200` JSON, the same five fields. **The secrets are returned in clear.** |
-| Errors | `400` empty name; `500` JSON `resource not found` when the name has no tokens |
+| Response | `200` JSON `{"name", "stored": true, "consumer_key_suffix": "…abcd", "access_token_expiry"}`. **The secrets are never returned**; to replace tokens, `PUT` new ones. |
+| Errors | `404` when the name has no tokens |
 
 #### `PUT /v1/dep/config/{name}` and `GET /v1/dep/config/{name}`
 
@@ -552,7 +558,7 @@ curl -u fleetcore:$API_KEY 'https://mdm.example.com/v1/dep/names?limit=20&offset
 | Purpose | The devices the syncer has recorded for the name (the same list that gates `/enroll/ade` and ACME). Each row is the device record as Apple returned it. |
 | Pagination | none; at most 1000 rows, sorted by serial number |
 | Response | `200` JSON `{"devices":[{"serial_number":"...","model":"...", ...}]}`; each element is Apple's device record as JSON (whatever fields Apple sent, for example `serial_number`, `model`, `os`, `device_assigned_date`) |
-| Errors | `500` plain text on a storage error. The handler does not check the method (any method lists). |
+| Errors | `500` plain text on a storage error. Only GET is accepted. |
 
 Rows are written on every sync; a device Apple removes (`op_type` `deleted`) is deleted from the list.
 
@@ -574,13 +580,13 @@ After each fetch or sync the server records the devices, emits a blueprint devic
 | Purpose | Define a DEP profile with Apple (how an assigned device behaves in Setup Assistant), record what it promises, and optionally make it the profile new (and existing) devices get. `{name}` is the DEP name; the profile's own name is `name` in the body. |
 | Request | JSON `ProfileSpec`, body limit 1 MiB. Unknown fields are ignored. |
 | Response | `200` JSON `DefineResult` |
-| Errors | `400` plain text `the body is not valid JSON: ...`; `502` JSON `{"error":"...","result":<DefineResult or null>}` for every other failure: missing profile `name`, no enrollment URL, a failure calling Apple (`defining the profile: ...`), no profile UUID returned, a storage error, or a failure assigning existing devices (`result` then holds the progress so far) |
+| Errors | `400` plain text `the body is not valid JSON: ...`; `422` JSON `{"error":"..."}` for a missing profile `name` or no enrollment URL (Apple is not asked); `502` JSON `{"error":"...","result":<DefineResult or null>}` for a failure calling Apple (`defining the profile: ...`), no profile UUID returned, a storage error, or a failure assigning existing devices (`result` then holds the progress so far) |
 
 `ProfileSpec` fields (Go zero values apply for omitted fields, except where a default is listed):
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
-| `name` | string | required | Profile name shown to Apple (`profile_name`). A missing value is a `502`, not a `400`. |
+| `name` | string | required | Profile name shown to Apple (`profile_name`). A missing value is a `422`. |
 | `url` | string | this server's `<base>/enroll/ade` | Where the device fetches its enrollment profile. |
 | `supervised` | bool | `true` | Device is supervised (`is_supervised`). Also stored as the promise used for devices Apple assigns to this name. |
 | `mandatory` | bool | `true` | The person cannot skip enrollment (`is_mandatory`). |
@@ -652,7 +658,7 @@ Common conventions:
 | 422 | Validation failure |
 | 500 | Store error |
 | Timestamps | RFC 3339 |
-| Pagination | Cursor based and sorted by id (devices) or serial (expected, DEP). Pass the previous page's `next` as the cursor; an empty `next` means no more pages. The cursor parameter name differs by endpoint (`cursor`, `after`) and is noted per endpoint |
+| Pagination | Cursor based and sorted by id (devices) or serial (expected, DEP). Pass the previous page's `next` as the cursor; an empty `next` means no more pages. The cursor parameter is `cursor` everywhere (`GET /v1/devices/expected` still accepts the older `after`); `GET /v1/events` pages by sequence number (`after`) |
 
 ```sh
 export API=https://fleet.example.com/v1   # your fleetcore base URL
@@ -1640,7 +1646,7 @@ curl -u fleetcore:$API_KEY $HOST/v1/commands/5C0D0F7E-1111-4222-8333-94445555666
 
 Source: `fleetcore/server/listing.go`, `storage/mongodb/query.go`. Available only when the storage is MongoDB. Mounted at `/v1/enrollments`, `/v1/enrollments/` and `/v1/queue`. Only `GET` is routed (other methods are `405` from the Go 1.22 mux).
 
-Paging for all lists (including `GET /v1/commands`): `limit` defaults to 100 and is clamped to 1000. The response has `next`, an opaque URL-safe base64 keyset cursor; pass it back as `cursor` to continue. `next` is the empty string on the last page, but it is also non-empty when the last page happens to be exactly `limit` rows long (the following page is then empty). Cursors stay valid while data is added and never skip or repeat a row. A malformed cursor gives `400` (`bad cursor`).
+Paging for all lists (including `GET /v1/commands`): `limit` defaults to 100 and is clamped to 1000. The response has `next`, an opaque URL-safe base64 keyset cursor; pass it back as `cursor` to continue. `next` is the empty string exactly when there are no more rows (the server reads one row beyond the page to know). Cursors stay valid while data is added and never skip or repeat a row. A malformed cursor gives `400` (`bad cursor`).
 
 #### `GET /v1/enrollments`
 
@@ -2128,42 +2134,131 @@ curl -u fleetcore:$API_KEY -X POST $HOST/v1/escrowkeyunlock \
   --data-urlencode escrowKey=ABCD-EFGH-IJKL-MNOP-QRST-UVWX --data-urlencode topic=com.apple.mgmt.External.0000
 ```
 
+## Events and subscriptions
+
+fleetcore turns changes in its database into events, keeps them for seven days in a log with a sequence number, and lets you read them (a page, a live stream) or subscribe a webhook that is delivered to in order, retried, and replayable. The management API login applies to every endpoint here.
+
+### The event
+
+| Field | Type | |
+| --- | --- | --- |
+| `seq` | integer | position in the tenant's log; resume from the last one you handled |
+| `id` | string | stable for a change however many times it is delivered; ignore repeats |
+| `type` | string | see the table |
+| `key` | string | the object the event is about |
+| `data` | object | identifiers and states only; never profile bodies, command results, tokens or any sealed value |
+| `at` | string (RFC 3339) | when the change was made |
+| `origin` | string | `fleetcore`, or `fleetcore:<tenant>` |
+
+`GET /v1/events/types` returns the catalog (type, description, what `key` is, the fields of `data`). Types: `enrollment.created`, `enrollment.checkout`, `device.enrolled`, `device.os_changed`, `device.renamed`, `device.supervision_changed`, `device.membership_changed`, `device.deactivated`, `device.lost_mode_changed`, `device.certificate_associated`, `command.queued`, `command.result`, `application.state`, `blueprint.saved`, `blueprint.deleted`, `blueprint.revision`, `group.saved`, `group.deleted`, `vault.access`, `dep.device.assigned`, `dep.device.removed`, `os.release.published`, `schema.updated`, `applicability.changed`, and `test`. A type filter is a list of exact types and prefixes such as `command.*`; `*` or an empty list is everything.
+
+#### `GET /v1/events`
+
+| | |
+|---|---|
+| Query | `after` (sequence number; events with a larger one), `types` (comma separated filter), `key` (exact), `limit` (default 100, at most 1000) |
+| Response | `200` `{"events": [...oldest first], "next": <seq or 0>, "last_seq": <newest in the log>}`; `next` is the cursor for the following page, 0 when there is none |
+| Errors | `422` a type filter that matches no type |
+
+#### `GET /v1/events/stream`
+
+Server-Sent Events: each event is `id: <seq>`, `event: <type>`, `data: <event JSON>`. `types` and `key` filter. A new listener sees events from now on; `?after=<seq>` or the `Last-Event-ID` header resumes. A `: keep-alive` comment is sent every 15 seconds.
+
+```sh
+curl -N -u fleetcore:$API_KEY 'https://mdm.example.com/v1/events/stream?types=command.*,application.state'
+```
+
+### Subscriptions
+
+A subscription is a webhook with a cursor. Each is served on its own, one event at a time in order, so a slow endpoint holds back only itself. A delivery is a `POST` of the event JSON with `X-Fleetcore-Event` (id), `X-Fleetcore-Seq`, `X-Fleetcore-Subscription`, `X-Fleetcore-Timestamp` and `X-Fleetcore-Signature: sha256=<hex HMAC-SHA256 of "<timestamp>.<body>" keyed with the subscription's secret>`. Any 2xx advances the cursor. A failure is retried after 2 seconds, doubling up to about 17 minutes; after 25 failures in a row the subscription pauses itself (`state: paused`) until resumed. Redirects are not followed. By default a URL must be `https` and must not resolve to a private, loopback or link-local address, which is checked again on the address actually connected to (`-events-allow-private` lifts both).
+
+| Method and path | |
+|---|---|
+| `GET /v1/event-subscriptions` | list, each with `state` (active, failing, paused, disabled), `cursor`, `behind` (events not yet delivered), `delivered`, `failures`, `last_error`, `last_success_at`, `next_attempt_at` |
+| `POST /v1/event-subscriptions` | create `{"name", "url", "types": [...], "from_seq"}`; it starts at the newest event unless `from_seq` is given. `201` with the subscription and `secret` (`whsec_…`), **shown once** (sealed at rest). `422` for a bad URL or type |
+| `GET /v1/event-subscriptions/{id}` | one |
+| `PUT /v1/event-subscriptions/{id}` | change `name`, `url`, `types`, `enabled` (any subset) |
+| `DELETE /v1/event-subscriptions/{id}` | `204`; its delivery records go too |
+| `POST /v1/event-subscriptions/{id}/resume` | clear a pause and the failure count; `204` |
+| `POST /v1/event-subscriptions/{id}/replay` | `{"from_seq": N}`: deliver again everything after N (0: all the log keeps); `202` |
+| `POST /v1/event-subscriptions/{id}/test` | send a `test` event now and report `{"ok", "status", "millis", "error"}` |
+| `GET /v1/event-subscriptions/{id}/deliveries` | the latest attempts (three days kept): `seq`, `event`, `at`, `status`, `ok`, `error`, `millis`; `limit` up to 500 |
+
+```sh
+curl -u fleetcore:$API_KEY -X POST https://mdm.example.com/v1/event-subscriptions \
+  -d '{"name":"siem","url":"https://siem.example.com/hooks/mdm","types":["vault.access","command.result"]}'
+```
+
+Verify a delivery by computing the HMAC over `timestamp + "." + raw body` with the secret and comparing it, in constant time, to the signature; reject old timestamps.
+
+## Metrics
+
+`GET /metrics` serves Prometheus text (OpenMetrics when asked for) and is on unless `-metrics=false` (`FLEETCORE_NO_METRICS`). Login: `Authorization: Bearer <-metrics-token>` for a scraper, or the management API login. Without a token and without a management login the endpoint is absent (404).
+
+**Updated as the process works:**
+
+| Metric | Labels | |
+|---|---|---|
+| `fleetcore_http_requests_total` | `route`, `method`, `code` | `route` is bounded: known path words kept, identifiers become `{}` |
+| `fleetcore_http_request_duration_seconds` (histogram) | `route`, `method` | |
+| `fleetcore_http_response_bytes_total`, `fleetcore_http_in_flight_requests` | `route` | |
+| `fleetcore_admin_auth_total` | `result` (ok, denied), `method` (key, certificate, none) | |
+| `fleetcore_mdm_messages_total`, `fleetcore_mdm_message_duration_seconds` | `type` (Authenticate, TokenUpdate, CheckOut, CommandAndReportResults...), `result` | |
+| `fleetcore_mdm_command_reports_total` | `status` | Acknowledged, Error, NotNow, CommandFormatError, Idle |
+| `fleetcore_push_notifications_total`, `fleetcore_push_batch_duration_seconds` | `result` (sent, failed) | |
+| `fleetcore_blueprint_reconciles_total`, `fleetcore_blueprint_reconcile_duration_seconds` | `result` | |
+| `fleetcore_user_authenticate_total` | `result` (challenge, accepted, rejected) | |
+| `fleetcore_events_produced_total` | `type` | |
+| `fleetcore_event_sink_publishes_total`, `fleetcore_event_sink_publish_duration_seconds` | `sink`, `result` | |
+| `fleetcore_event_deliveries_total`, `fleetcore_event_delivery_duration_seconds` | `result`, `status` (2xx, 4xx, 5xx, none) | subscription deliveries |
+| `fleetcore_event_subscription_lag_events` | `subscription` | |
+| `fleetcore_build_info`, `fleetcore_start_time_seconds`, `go_*`, `process_*` | | |
+
+**Read from MongoDB when scraped** (at most every 15 seconds; each collector timed in `fleetcore_scrape_collector_duration_seconds{collector}` and `fleetcore_scrape_collector_success{collector}`; scoped to the tenant):
+
+| Metric | Labels | |
+|---|---|---|
+| `fleetcore_enrollments` | `type`, `enabled` | |
+| `fleetcore_devices` | `platform`, `active`, `supervised`, `enroll_type` | |
+| `fleetcore_devices_by_os_version` | `platform`, `os_version` | the 60 most common, the rest as `other` |
+| `fleetcore_devices_os_currency` | `platform`, `state` | current, behind_in_major, current_in_major_newer_major_exists, unknown |
+| `fleetcore_devices_not_seen` | `period` (1d, 7d, 30d, 90d) | active devices |
+| `fleetcore_devices_by_dep`, `_awaiting_setup`, `_lost_mode` | | |
+| `fleetcore_reconcile_queue_due`, `_oldest_due_age_seconds`, `fleetcore_reconcile_leased` | | blueprint work waiting |
+| `fleetcore_command_queue` | `status` | Queued, Acknowledged, ... |
+| `fleetcore_command_queue_oldest_unanswered_age_seconds`, `fleetcore_command_queue_not_now_repeated` | | |
+| `fleetcore_commands_stored` | `request_type` | |
+| `fleetcore_blueprints`, `fleetcore_groups`, `fleetcore_blueprint_applications`, `fleetcore_blueprint_applications_given_up` | `enabled`; `kind`; `kind`, `delivery`, `state` | |
+| `fleetcore_ddm_declarations`, `_ddm_devices`, `_ddm_status_reports` | | |
+| `fleetcore_dep_devices`, `fleetcore_dep_names` | `dep` | |
+| `fleetcore_vpp_tokens`, `fleetcore_vpp_licenses` | | |
+| `fleetcore_vault_secrets`, `fleetcore_vault_access_24h` | `kind`; `action` | |
+| `fleetcore_identity_certificates`, `fleetcore_identity_certificates_expiring` | `state`; `within` (7d, 30d, 90d) | |
+| `fleetcore_certificate_expires_in_seconds`, `fleetcore_certificate_expiry_timestamp_seconds` | `kind` (device_identity_ca, apns_push_certificate, dep_access_token, vpp_content_token), `name` | alert on these |
+| `fleetcore_user_auth_tokens`, `fleetcore_acme_accounts` | | |
+| `fleetcore_event_log_last_sequence`, `_event_log_events`, `_event_log_oldest_age_seconds`, `fleetcore_event_subscriptions`, `fleetcore_event_subscription_delivered_total`, `_consecutive_failures` | `state`; `subscription`, `name` | |
+| `fleetcore_schema_snapshot_timestamp_seconds`, `fleetcore_schema_definitions`, `fleetcore_os_releases_refresh_timestamp_seconds`, `fleetcore_os_releases_known`, `fleetcore_os_latest_release_timestamp_seconds` | | Apple's feeds |
+| `fleetcore_mongodb_ping_seconds`, `_mongodb_data_bytes`, `_storage_bytes`, `_index_bytes`, `_objects`, `_collections` | | database-wide figures only when the database belongs to one tenant |
+
+`deploy/fleetcore/prometheus-rules.yaml` has alerting rules for certificates about to expire, a stuck reconcile queue, unanswered commands, push failures, failing subscriptions and more.
+
 ## What fleetcore calls: events and bridges
 
 fleetcore also makes requests to systems you run. Each is off unless configured.
 
-### Event relay (`-relay-nats`, `-relay-webhook`)
+### Event sinks (`-relay-nats`, `-relay-webhook`)
 
-Every event is this JSON object:
-
-| Field | Type | |
-| --- | --- | --- |
-| `id` | string | stable for a change however many times it is delivered (the change stream's own position, hashed); use it to ignore repeats |
-| `type` | string | see below |
-| `key` | string | the object the event is about (an enrollment ID, a device ID, a blueprint ID, a serial number) |
-| `data` | object | identifiers and states only; never profile bodies, command results, tokens or any value sealed at rest |
-| `at` | string (RFC 3339) | when the change was made |
-| `origin` | string | `fleetcore`, or `fleetcore:<tenant>` |
-
-| `type` | `key` | `data` |
-| --- | --- | --- |
-| `enrollment.created` | enrollment ID | `enrollment`, `type` (Device, User, User Enrollment, ...) |
-| `enrollment.checkout` | enrollment ID | `enrollment` |
-| `command.queued` | enrollment ID | `enrollment`, `command_uuid` |
-| `command.result` | enrollment ID | `enrollment`, `command_uuid`, `status` (Acknowledged, Error, NotNow, CommandFormatError) |
-| `application.state` | device ID | `device`, `blueprint`, `item`, `state` (pending, applied, failed, removing, not_applicable) |
-| `blueprint.saved`, `blueprint.deleted` | blueprint ID | `blueprint` |
-| `dep.device.assigned` | serial number | `serial` |
+The event log, its types and the subscription API are in [Events and subscriptions](#events-and-subscriptions). The two sinks below receive every event (or those `-relay-types` selects) as it is produced, in order.
 
 **NATS.** Published to the subject `<prefix>.<type>.<key>` (default prefix `fleetcore.events`; characters NATS reserves in the key, `.` `*` `>` and spaces, become `_`). Core pub/sub unless `-relay-jetstream` is set, in which case each event is a JetStream publish with an acknowledgement and the message id set to `id` (the stream must exist and cover the subjects; JetStream's duplicate window then drops repeats).
 
-**Webhook.** `POST` of the event JSON to `-relay-webhook`, with headers `Content-Type: application/json`, `X-Fleetcore-Event: <id>` and, when `-relay-webhook-secret` is set, `X-Fleetcore-Signature: <hex HMAC-SHA256 of the body>`. Any 2xx is success; anything else is retried with a growing pause (half a second, doubling, up to 30 seconds) and later events wait behind it, so order is kept.
+**Webhook.** `POST` of the event JSON to `-relay-webhook`, with `Content-Type: application/json`, `X-Fleetcore-Event: <id>` and, when `-relay-webhook-secret` is set, `X-Fleetcore-Timestamp: <unix seconds>` and `X-Fleetcore-Signature: sha256=<hex HMAC-SHA256 of "<timestamp>.<body>">` (the same scheme as subscriptions; reject a timestamp more than a few minutes old). Any 2xx is success; anything else is retried with a growing pause (half a second, doubling, up to 30 seconds) and later events wait behind it, so order is kept.
 
-**Guarantees.** At least once, in the order of the database's change stream, per tenant. The resume position is saved after each event, so a restart repeats at most the last one. One process per tenant relays at a time (a lease in the database); another takes over when the holder stops.
+**Guarantees.** At least once, in the order of the database's change stream, per tenant. The resume position is saved after each change, so a restart repeats at most the last one. One process per tenant relays at a time (a lease in the database); another takes over when the holder stops.
 
 ### MicroMDM-compatible webhook (embedding only)
 
-When fleetcore is embedded as a Go library, `server.Config.WebhookURL` (with `WebhookHMACKey`) makes the MDM service post every check-in and command report as the MicroMDM-style envelope `EventJson` (`service/webhook`): `topic` (`mdm.Authenticate`, `mdm.TokenUpdate`, `mdm.CheckOut`, `mdm.UserAuthenticate`, `mdm.SetBootstrapToken`, `mdm.GetBootstrapToken`, `mdm.GetToken`, `mdm.DeclarativeManagement`, `mdm.Connect`), `event_id`, `created_at`, and `checkin_event` or `acknowledge_event` (`udid`, `enrollment_id`, `ids`, `raw_payload` base64 of the device's plist, `url_params`, `token_update_tally` on TokenUpdate). Any status other than 200 is an error. With a key, the body is signed in `X-Hmac-Signature` (base64 HMAC-SHA256). The `fleetcore` binary has no flag for it; use the event relay above.
+When it is turned on, `-webhook-url` (`server.Config.WebhookURL`, with `-webhook-hmac-key`) makes the MDM service post every check-in and command report as the MicroMDM-style envelope `EventJson` (`service/webhook`): `topic` (`mdm.Authenticate`, `mdm.TokenUpdate`, `mdm.CheckOut`, `mdm.UserAuthenticate`, `mdm.SetBootstrapToken`, `mdm.GetBootstrapToken`, `mdm.GetToken`, `mdm.DeclarativeManagement`, `mdm.Connect`), `event_id`, `created_at`, and `checkin_event` or `acknowledge_event` (`udid`, `enrollment_id`, `ids`, `raw_payload` base64 of the device's plist, `url_params`, `token_update_tally` on TokenUpdate). Any status other than 200 is an error. With a key, the body is signed in `X-Hmac-Signature` (base64 HMAC-SHA256). The event relay and subscriptions are the richer way to follow what happens.
 
 ### UserAuthenticate bridge (`-ua-verify-url`)
 
@@ -2189,15 +2284,13 @@ The bridge computes the HTTP digest (RFC 2617: `MD5(MD5(user:realm:password):non
 
 ## Behaviors worth knowing
 
-Found while writing this reference; each is how the code works today, not a recommendation.
+How the code works today; none of these is a recommendation.
 
-- **Enrollment is open by default.** The `fleetcore` binary does not set an enrollment authorizer, so `/enroll` hands a profile (with a one-use SCEP challenge) to anyone who can reach it. Put it behind your own check (a proxy with authentication, or embed fleetcore and set `EnrollAuthorize`), or use ADE and account-driven enrollment, which authenticate the person or device.
-- **The management API checks the password only.** With an API key, the Basic-auth user name is ignored (`fleetcore` by convention). Use `-admin-ca` for named, certificate-based callers; both can be required together.
-- **`GET /v1/dep/tokens/{name}` returns the OAuth secrets** (NanoDEP behavior, stored sealed but returned in clear to an authenticated caller). Treat that endpoint as highly privileged.
-- **Defaults differ.** The binary's `-cert-source` defaults to `tls`; the library's `server.Config` defaults to `signature`.
-- **Some settings have no flag.** `SeparateCheckin`, `SCEPValidityDays`, `ChallengeTTL`, `AllowRetroactive`, `WebhookURL` and `WebhookHMACKey` exist only on `server.Config`, so the stock binary does not serve `/checkin`.
-- **Paging.** The cursor parameter is `cursor` on most lists but `after` on `GET /v1/devices/expected`; `next` can be set on a last page that is exactly `limit` rows long, so stop when a page comes back empty.
-- **Command status.** `POST /v1/commands` does not return 207; per-device enqueue or push failures still answer 200, so read `result.status.*`.
-- **Verbs.** `/v1/migration`, `/v1/push/` and `/v1/enqueue/` accept any HTTP method.
-- **Errors.** NanoDEP's handlers answer 500 even for "not found"; `POST /v1/dep/profiles/{name}` answers 502 for a missing profile name; Lost Mode without a message or phone number answers 500.
+- **Enrollment is closed unless you open it.** `/enroll` needs `-enroll-secret`, `-enroll-auth-url` or `-enroll-open`. With `-enroll-open` anyone who can reach the server gets a profile and a one-use SCEP challenge.
+- **The API key's user name is ignored,** only the password is checked; named keys (`-api-keys`) give per-caller audit. Use `-admin-ca` for certificate-based callers; both can be required together.
+- **Defaults.** `-cert-source` and `server.Config` both default to `tls`.
+- **Command status.** `POST /v1/commands` answers `207` when some devices were not queued or not pushed; `result.status.*` says which.
+- **Methods.** `/v1/migration` takes PUT or POST; `/v1/enqueue/` PUT or POST; `/v1/push/` GET, PUT or POST. Anything else is `405`.
 - **ACME.** `hardware-identifier` orders are refused unless `-acme-allow-unassigned` is set, because only serial numbers are looked up against what Apple assigned.
+- **Events need a replica set and change stream access.** A MongoDB login restricted per database must be allowed to open a change stream on its database.
+- **Metrics refresh.** The database gauges are at most 15 seconds old; scrape no more often than that for no benefit.

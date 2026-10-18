@@ -18,6 +18,7 @@ import (
 
 	"github.com/micromdm/nanolib/log/stdlogfmt"
 	"github.com/micromdm/nanomdm/fleetcore/byod"
+	"github.com/micromdm/nanomdm/fleetcore/metrics"
 	"github.com/micromdm/nanomdm/fleetcore/provision"
 	"github.com/micromdm/nanomdm/fleetcore/relay"
 	"github.com/micromdm/nanomdm/fleetcore/seal"
@@ -66,6 +67,8 @@ func main() {
 		relayPfx       = flag.String("relay-nats-prefix", env("FLEETCORE_RELAY_NATS_PREFIX", "fleetcore.events"), "subject prefix of the events: <prefix>.<type>.<key>")
 		relayJS        = flag.Bool("relay-jetstream", os.Getenv("FLEETCORE_RELAY_JETSTREAM") != "", "publish through JetStream with an acknowledgement (the stream must exist)")
 		relayHook      = flag.String("relay-webhook", env("FLEETCORE_RELAY_WEBHOOK", ""), "URL to post events to, signed with -relay-webhook-secret")
+		metricsOn      = flag.Bool("metrics", os.Getenv("FLEETCORE_NO_METRICS") == "", "serve Prometheus metrics at /metrics (login: the management API key or certificate, or -metrics-token)")
+		metricsToken   = flag.String("metrics-token", env("FLEETCORE_METRICS_TOKEN", ""), "bearer token a Prometheus scraper uses at /metrics")
 		relayTypesFlag = flag.String("relay-types", env("FLEETCORE_RELAY_TYPES", ""), "event types (comma separated, e.g. command.*,device.*) the NATS and webhook sinks take; empty is all")
 		eventsPrivate  = flag.Bool("events-allow-private", os.Getenv("FLEETCORE_EVENTS_ALLOW_PRIVATE") != "", "let event subscriptions point at private and loopback addresses")
 		relaySec       = flag.String("relay-webhook-secret", env("FLEETCORE_RELAY_WEBHOOK_SECRET", ""), "HMAC secret that signs the webhook body")
@@ -200,6 +203,10 @@ func main() {
 	if *enrollSec == "" && *enrollURL == "" && !*enrollOpen {
 		logger.Info("msg", "enrollment is closed: set -enroll-secret or -enroll-auth-url, or -enroll-open to let anyone download the profile (ADE and account-driven enrollment are unaffected)")
 	}
+	var metricSet *metrics.Metrics
+	if *metricsOn {
+		metricSet = metrics.New(version)
+	}
 	var uaCfg *server.UserAuthConfig
 	if *uaRealm != "" {
 		uaCfg = &server.UserAuthConfig{Realm: *uaRealm, RequireToken: *uaRequire}
@@ -227,7 +234,7 @@ func main() {
 	srv, err := server.New(ctx, server.Config{
 		BaseURL: *base, Organization: *org, Topic: *topic, Storage: store, PKIDB: mc.Database(*dbName), PKITenant: *tenant,
 		CAPass: *caPass, CertSource: server.CertSource(*source), CertHeader: *header, APIKey: *apiKey, Logger: logger, Debug: *debug, Version: version, NoFeeds: *noFeeds, Sealer: sealer, AdminCA: adminPool, BYOD: byodCfg, MAIDDEPName: *maidDEP, ACME: acmeCfg, UserAuth: uaCfg, Migration: *migration, MigrateCAs: migrateCAs,
-		APIKeys: namedKeys, RelaySinks: relaySinks, EventsAllowPrivate: *eventsPrivate, EnrollAuthorize: enrollAuthorizer(*enrollSec, *enrollURL, *enrollOpen), SeparateCheckin: *sepCheckin, SCEPValidityDays: *scepDays, ChallengeTTL: *challengeT, AllowRetroactive: *retroactiv, WebhookURL: *webhookURL, WebhookHMACKey: *webhookKey,
+		APIKeys: namedKeys, Metrics: metricSet, MetricsToken: *metricsToken, RelaySinks: relaySinks, EventsAllowPrivate: *eventsPrivate, EnrollAuthorize: enrollAuthorizer(*enrollSec, *enrollURL, *enrollOpen), SeparateCheckin: *sepCheckin, SCEPValidityDays: *scepDays, ChallengeTTL: *challengeT, AllowRetroactive: *retroactiv, WebhookURL: *webhookURL, WebhookHMACKey: *webhookKey,
 	})
 	if err != nil {
 		fatal(logger, err)

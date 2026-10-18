@@ -27,6 +27,8 @@ services:
       FLEETCORE_TOPIC: ${FLEETCORE_TOPIC:-}            # com.apple.mgmt.External.<uuid>, from your push certificate
       FLEETCORE_CERT_SOURCE: signature                 # TLS ends at your proxy
       FLEETCORE_API_KEY: ${FLEETCORE_API_KEY:?set a long random API key}
+      FLEETCORE_ENROLL_SECRET: ${FLEETCORE_ENROLL_SECRET:?set a code people need to download the enrollment profile (or use FLEETCORE_ENROLL_OPEN=1 instead)}
+      FLEETCORE_METRICS_TOKEN: ${FLEETCORE_METRICS_TOKEN:-}   # bearer token for a Prometheus scraper at /metrics
       FLEETCORE_MASTER_KEY: ${FLEETCORE_MASTER_KEY:?run: docker run --rm fleetcore keygen}
       FLEETCORE_LISTEN: ":9000"
 

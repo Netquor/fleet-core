@@ -20,7 +20,7 @@ FLEETCORE_MASTER_KEY=<the key> \
 docker compose -f deploy/fleetcore/compose.yaml up --build
 ```
 
-Then upload the push certificate and key (`PUT /v1/pushcert`), and send a device to `https://mdm.example.com/enroll`. Without Docker: `make fleetcore` builds the binary.
+Then upload the push certificate and key (`PUT /v1/pushcert`), and send a device to `https://mdm.example.com/enroll?code=<FLEETCORE_ENROLL_SECRET>`. **Enrollment is closed unless you open it:** set `FLEETCORE_ENROLL_SECRET` (a code people need), `FLEETCORE_ENROLL_AUTH_URL` (a forward-auth gate that decides), or `FLEETCORE_ENROLL_OPEN=1` (anyone who can reach the server gets a profile). ADE and account-driven enrollment authenticate the device or person themselves. Without Docker: `make fleetcore` builds the binary.
 
 TLS can end at fleetcore (`-tls-cert`/`-tls-key`, or `-autocert host` for Let's Encrypt; devices then authenticate with the certificate they got from SCEP) or at a proxy in front (`-cert-source signature`: devices sign their requests, so the proxy needs nothing special).
 
@@ -38,7 +38,13 @@ Every option is a flag or an environment variable.
 | `FLEETCORE_ORG` | `-org` | organization name on the CA and the profile |
 | `FLEETCORE_CERT_SOURCE` | `-cert-source` | `tls`, `signature` or `header` |
 | `FLEETCORE_TLS_CERT`, `FLEETCORE_TLS_KEY`, `FLEETCORE_AUTOCERT` | | TLS ends here |
-| `FLEETCORE_API_KEY` | `-api-key` | management API key (basic auth, user `fleetcore`) |
+| `FLEETCORE_API_KEY` | `-api-key` | management API key (basic auth; the password is the key, the user name is ignored) |
+| `FLEETCORE_API_KEYS` | `-api-keys` | further keys as `name:key,name:key`; calls are logged and audited under the name |
+| `FLEETCORE_ENROLL_SECRET`, `FLEETCORE_ENROLL_AUTH_URL`, `FLEETCORE_ENROLL_OPEN` | `-enroll-secret`, `-enroll-auth-url`, `-enroll-open` | who may download the enrollment profile; closed if none is set |
+| `FLEETCORE_SEPARATE_CHECKIN`, `FLEETCORE_SCEP_VALIDITY_DAYS`, `FLEETCORE_CHALLENGE_TTL`, `FLEETCORE_ALLOW_RETROACTIVE` | `-separate-checkin`, `-scep-validity-days`, `-challenge-ttl`, `-allow-retroactive` | check-in at `/checkin`; identity certificate lifetime (365); SCEP challenge lifetime (24h); associate older enrollments with a certificate on their next check-in |
+| `FLEETCORE_WEBHOOK_URL`, `FLEETCORE_WEBHOOK_HMAC_KEY` | `-webhook-url`, `-webhook-hmac-key` | MicroMDM-style event for every check-in and command report |
+| `FLEETCORE_NO_METRICS`, `FLEETCORE_METRICS_TOKEN` | `-metrics`, `-metrics-token` | `/metrics` (on by default) and the bearer token a scraper uses |
+| `FLEETCORE_RELAY_TYPES`, `FLEETCORE_EVENTS_ALLOW_PRIVATE` | `-relay-types`, `-events-allow-private` | event types the NATS and webhook sinks take; let subscriptions point at private addresses |
 | `FLEETCORE_ADMIN_CA` | `-admin-ca` | management API requires a client certificate from this CA |
 | `FLEETCORE_MONGO_CERT`, `FLEETCORE_MONGO_CA` | `-mongo-cert`, `-mongo-ca` | log in to MongoDB with a certificate |
 | `FLEETCORE_TENANT_KEYS` | `-tenant-keys` | this tenant's encryption keys |
@@ -89,7 +95,19 @@ For a Mac bound to a directory, or a Shared iPad, the device asks the server to 
 
 ### Events
 
-`-relay-nats nats://…` (and/or `-relay-webhook`) publishes what changes in the database as events `{id, type, key, data, at, origin}` on `<prefix>.<type>.<key>` (default prefix `fleetcore.events`; use `nq.events` to join the platform's own bus). The events: `enrollment.created`, `enrollment.checkout`, `command.queued`, `command.result` (status only), `application.state` (a blueprint item's state on a device), `blueprint.saved`, `blueprint.deleted`, `dep.device.assigned`. They carry identifiers and states, never profile bodies, results or tokens; a consumer that needs more asks the authenticated API. It reads one MongoDB change stream for the tenant (so it needs a replica set), saves the resume token after each event, and retries a failed delivery with a growing pause: delivery is at least once, and `id` is the same each time. Only one process of a tenant relays at a time (a lease in the database); another takes over from the saved position when it stops. `-relay-jetstream` publishes through JetStream with an acknowledgement (the stream must exist and cover the subjects); the webhook is signed with HMAC-SHA256 in `X-Fleetcore-Signature`.
+fleetcore turns database changes into events and keeps them for seven days in a log with sequence numbers. 24 types cover enrollments, devices (enrolled, OS changed, renamed, supervision, groups and tags, deactivated, Lost Mode), commands (queued, result), blueprint item states on devices, blueprints and groups, vault access, DEP assignment, new OS releases, schema updates and applicability changes (`GET /v1/events/types`). Events carry identifiers and states, never profile bodies, results, tokens or anything sealed.
+
+Ways to receive them:
+
+- **Poll or stream the log:** `GET /v1/events?after=<seq>&types=command.*` and `GET /v1/events/stream` (Server-Sent Events, resumable with `Last-Event-ID`).
+- **Subscriptions:** `POST /v1/event-subscriptions` registers a webhook. Each subscription has its own cursor and is delivered to one event at a time in order, signed (`X-Fleetcore-Signature: sha256=…`, HMAC over `timestamp.body` with a secret shown once), retried with backoff, paused by itself after 25 failures in a row, and replayable from any sequence number. A slow endpoint holds back only itself. URLs must be https and cannot point at private addresses (checked again on connection, so DNS tricks and redirects do not get through).
+- **Sinks:** `-relay-nats nats://…` publishes `<prefix>.<type>.<key>` (default prefix `fleetcore.events`; `nq.events` joins the platform's bus), core or JetStream with `-relay-jetstream`; `-relay-webhook` posts to one URL. `-relay-types command.*,device.*` limits both.
+
+At least once, in order, per tenant; `id` is stable for repeats. One process per tenant relays at a time (a lease in the database). The change stream needs a replica set, and a MongoDB identity restricted to its database must be allowed to open a change stream there.
+
+### Metrics
+
+`/metrics` serves Prometheus text: HTTP by route, MDM messages by type, pushes, reconcile runs, event deliveries, and, read from MongoDB at most every 15 seconds, enrollments, devices by platform, OS version and how current their OS is, devices not seen, the reconcile and command queues with the age of the oldest waiting item, blueprint applications by kind, delivery and state, vault access, identity certificates and when each certificate and token the server depends on (CA, APNs, DEP, Apps and Books) expires, the event log and every subscription's lag, Apple's feeds and MongoDB. Scrape it with a bearer token (`-metrics-token`) or the management login; `deploy/fleetcore/prometheus-rules.yaml` has alerting rules. The full list is in [api-reference.md](api-reference.md#metrics).
 
 ### Moving from another MDM
 

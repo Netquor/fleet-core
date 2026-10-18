@@ -70,23 +70,27 @@ func strExt(c *x509.Certificate, oid asn1.ObjectIdentifier) string {
 	return ""
 }
 
-// nonceExt reads the freshness nonce, which may be wrapped as a DER octet string.
-func nonceExt(c *x509.Certificate) []byte {
+// hasNonce reports whether the freshness extension carries want. The value may be wrapped as DER octet strings (how many layers is not fixed), and a
+// hash can itself parse as DER, so each layer is compared rather than peeling blindly until nothing parses.
+func hasNonce(c *x509.Certificate, want []byte) bool {
 	for _, e := range c.Extensions {
-		if e.Id.Equal(oidNonce) {
-			v := e.Value
-			for i := 0; i < 3; i++ {
-				var raw asn1.RawValue
-				rest, err := asn1.Unmarshal(v, &raw)
-				if err != nil || len(rest) != 0 {
-					break
-				}
-				v = raw.Bytes
+		if !e.Id.Equal(oidNonce) {
+			continue
+		}
+		v := e.Value
+		for i := 0; i < 4; i++ {
+			if bytes.Equal(v, want) {
+				return true
 			}
-			return v
+			var raw asn1.RawValue
+			rest, err := asn1.Unmarshal(v, &raw)
+			if err != nil || len(rest) != 0 {
+				break
+			}
+			v = raw.Bytes
 		}
 	}
-	return nil
+	return false
 }
 
 // VerifyAttestation checks a device attestation object (CBOR, format "apple"): the certificate chain leads to the roots, and the leaf carries the freshness nonce that ties it to this
@@ -119,7 +123,7 @@ func VerifyAttestation(attObj []byte, keyAuthorization string, roots *x509.CertP
 		return nil, errors.New("the attestation does not lead to Apple's attestation root")
 	}
 	want := sha256.Sum256([]byte(keyAuthorization))
-	if !bytes.Equal(nonceExt(leaf), want[:]) {
+	if !hasNonce(leaf, want[:]) {
 		return nil, errors.New("the attestation is not for this challenge (its freshness nonce differs)")
 	}
 	a := &Attestation{Serial: strExt(leaf, oidSerial), UDID: strExt(leaf, oidUDID), PublicKey: leaf.RawSubjectPublicKeyInfo, Leaf: leaf}

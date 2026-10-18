@@ -220,7 +220,7 @@ func TestTranslateIKEv2VPN(t *testing.T) {
 			"AuthenticationMethod": "Certificate", "PayloadCertificateUUID": "ABC-1", "CertificateType": "ECDSA256",
 			"EnablePFS": uint64(1), "DisableMOBIKE": uint64(0), "MTU": uint64(1400), "IncludeAllNetworks": uint64(1),
 			"DeadPeerDetectionRate": "Medium", "SharedSecret": "s3cret",
-			"IKESecurityAssociationParameters": map[string]any{"EncryptionAlgorithm": "AES-256-GCM", "DiffieHellmanGroup": uint64(19)},
+			"IKESecurityAssociationParameters":   map[string]any{"EncryptionAlgorithm": "AES-256-GCM", "DiffieHellmanGroup": uint64(19)},
 			"ChildSecurityAssociationParameters": map[string]any{"EncryptionAlgorithm": "3DES"},
 		},
 		"DNS": map[string]any{"ServerAddresses": []any{"10.0.0.1"}},

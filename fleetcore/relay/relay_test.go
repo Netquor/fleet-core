@@ -105,7 +105,7 @@ func TestRelayPublishesWhatMatters(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	out := &collector{}
-	r := &Relay{DB: db, Tenant: "acme", Out: out, Holder: "a"}
+	r := &Relay{DB: db, Tenant: "acme", Sinks: []Sink{{Name: "test", Out: out}}, Holder: "a"}
 	go r.Run(ctx)
 	time.Sleep(2 * time.Second)
 
@@ -150,7 +150,7 @@ func TestRelayResumesAndOnlyOneHoldsTheLease(t *testing.T) {
 	enr := db.Collection("enrollments")
 	first := &collector{}
 	c1, cancel1 := context.WithCancel(ctx)
-	r1 := &Relay{DB: db, Out: first, Holder: "one", LeaseFor: 3 * time.Second}
+	r1 := &Relay{DB: db, Sinks: []Sink{{Name: "test", Out: first}}, Holder: "one", LeaseFor: 3 * time.Second}
 	done := make(chan struct{})
 	go func() { r1.Run(c1); close(done) }()
 	time.Sleep(2 * time.Second)
@@ -159,7 +159,7 @@ func TestRelayResumesAndOnlyOneHoldsTheLease(t *testing.T) {
 	second := &collector{}
 	c2, cancel2 := context.WithCancel(ctx)
 	defer cancel2()
-	go (&Relay{DB: db, Out: second, Holder: "two", LeaseFor: 3 * time.Second}).Run(c2)
+	go (&Relay{DB: db, Sinks: []Sink{{Name: "test", Out: second}}, Holder: "two", LeaseFor: 3 * time.Second}).Run(c2)
 
 	_, _ = enr.InsertOne(ctx, bson.D{{Key: "_id", Value: "E1"}, {Key: "id", Value: "E1"}, {Key: "type", Value: "Device"}})
 	first.wait(t, 1)
@@ -204,19 +204,19 @@ func TestNATSAndWebhookSinks(t *testing.T) {
 		t.Fatal("nothing arrived on NATS")
 	}
 
-	var gotSig, gotBody string
+	var gotSig, gotBody, gotTS string
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
-		gotSig, gotBody = r.Header.Get("X-Fleetcore-Signature"), string(b)
+		gotSig, gotBody, gotTS = r.Header.Get("X-Fleetcore-Signature"), string(b), r.Header.Get("X-Fleetcore-Timestamp")
 	}))
 	defer ts.Close()
 	if err := (&Webhook{URL: ts.URL, Secret: []byte("k")}).Publish(context.Background(), e); err != nil {
 		t.Fatal(err)
 	}
 	m := hmac.New(sha256.New, []byte("k"))
-	m.Write([]byte(gotBody))
-	if gotSig != hex.EncodeToString(m.Sum(nil)) {
-		t.Error("the signature does not match the body")
+	m.Write([]byte(gotTS + "." + gotBody))
+	if gotSig != "sha256="+hex.EncodeToString(m.Sum(nil)) {
+		t.Error("the signature does not match the timestamp and body")
 	}
 	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(500) }))
 	defer bad.Close()

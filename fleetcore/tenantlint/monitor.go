@@ -235,6 +235,20 @@ func (m *Monitor) check(e *event.CommandStartedEvent) {
 			return
 		}
 		first, _ := vals[0].DocumentOK()
+		if _, csErr := first.LookupErr("$changeStream"); csErr == nil {
+			// A change stream reads every collection of the database: the stage after it must keep only this tenant's changes (by the tenant on the document, or the tenant prefix of its id).
+			if len(vals) > 1 {
+				if next, ok := vals[1].DocumentOK(); ok {
+					if m2, err := next.LookupErr("$match"); err == nil {
+						if md, ok := m2.DocumentOK(); ok && m.changeScoped(md) {
+							return
+						}
+					}
+				}
+			}
+			m.fail(e, "a change stream is not limited to the tenant")
+			return
+		}
 		match, err := first.LookupErr("$match")
 		md, ok := match.DocumentOK()
 		if err != nil || !ok || !m.scoped(md) {
@@ -243,6 +257,31 @@ func (m *Monitor) check(e *event.CommandStartedEvent) {
 	default:
 		m.fail(e, "a command the tenant check does not know")
 	}
+}
+
+// changeScoped reports whether a $match after $changeStream has an $or that tests fullDocument.t against the tenant.
+func (m *Monitor) changeScoped(md bson.Raw) bool {
+	or, err := md.LookupErr("$or")
+	if err != nil {
+		return false
+	}
+	arr, ok := or.ArrayOK()
+	if !ok {
+		return false
+	}
+	vals, _ := arr.Values()
+	for _, v := range vals {
+		d, ok := v.DocumentOK()
+		if !ok {
+			continue
+		}
+		if t, err := d.LookupErr("fullDocument.t"); err == nil {
+			if s, ok := t.StringValueOK(); ok && s == m.tenant {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func isTenantID(v bson.RawValue, tenant string) bool {

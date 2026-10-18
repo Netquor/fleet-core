@@ -30,6 +30,8 @@ import (
 
 // Event is what is published. Its JSON is the envelope the rest of the platform uses: {type, key, data, at, origin} plus the id.
 type Event struct {
+	// Seq orders the events of a tenant; consumers resume from the last one they handled.
+	Seq    int64          `json:"seq,omitempty"`
 	ID     string         `json:"id"`
 	Type   string         `json:"type"`
 	Key    string         `json:"key"`
@@ -84,7 +86,7 @@ func (n *NATS) Publish(ctx context.Context, e Event) error {
 	return n.Conn.FlushWithContext(ctx)
 }
 
-// Webhook posts each event as JSON with an HMAC-SHA256 signature of the body in X-Fleetcore-Signature (hex), the event id in X-Fleetcore-Event, and retries a failed delivery.
+// Webhook posts each event as JSON with X-Fleetcore-Event (the id), X-Fleetcore-Timestamp and X-Fleetcore-Signature: "sha256=" and the hex HMAC-SHA256 of "<timestamp>.<body>" (the same scheme as subscriptions).
 type Webhook struct {
 	URL    string
 	Secret []byte
@@ -105,9 +107,11 @@ func (w *Webhook) Publish(ctx context.Context, e Event) error {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Fleetcore-Event", e.ID)
 	if len(w.Secret) > 0 {
+		ts := fmt.Sprint(time.Now().Unix())
 		m := hmac.New(sha256.New, w.Secret)
-		m.Write(body)
-		req.Header.Set("X-Fleetcore-Signature", hex.EncodeToString(m.Sum(nil)))
+		m.Write([]byte(ts + "." + string(body)))
+		req.Header.Set("X-Fleetcore-Timestamp", ts)
+		req.Header.Set("X-Fleetcore-Signature", "sha256="+hex.EncodeToString(m.Sum(nil)))
 	}
 	resp, err := c.Do(req)
 	if err != nil {
@@ -138,7 +142,10 @@ func (m Multi) Publish(ctx context.Context, e Event) error {
 type Relay struct {
 	DB     *mongo.Database
 	Tenant string
-	Out    Publisher
+	// Sinks receive every event their Types select, in order. Store (optional) keeps the log that subscriptions, replay and the event stream read.
+	Sinks  []Sink
+	Store  *Store
+	Hooks  Hooks
 	Logger log.Logger
 	// Origin is put on every event (default "fleetcore" or "fleetcore:<tenant>").
 	Origin string
@@ -149,6 +156,25 @@ type Relay struct {
 	Now    func() time.Time
 
 	mu sync.Mutex
+}
+
+// Sink is a destination for events: a name for metrics, the destination, and the types it takes (empty: all).
+type Sink struct {
+	Name  string
+	Out   Publisher
+	Types []string
+}
+
+// Hooks let a metrics layer watch the relay without the relay knowing about it. Any may be nil.
+type Hooks struct {
+	// Event: an event was produced (type).
+	Event func(typ string)
+	// Publish: a sink took or refused an event, and how long it took.
+	Publish func(sink, typ string, ok bool, d time.Duration)
+	// Delivery: a subscription delivery attempt.
+	Delivery func(sub string, ok bool, status int, d time.Duration)
+	// Lag: how far (in events) the slowest consumer is behind, and the age of the newest unprocessed change.
+	Lag func(subscription string, behind int64)
 }
 
 func (r *Relay) now() time.Time {
@@ -204,6 +230,10 @@ func (r *Relay) mine(c *changed) bool {
 	if r.Tenant == "" {
 		return true
 	}
+	switch c.NS.Coll {
+	case "os_releases", "schema_sets", "applicability":
+		return true // shared by every tenant: Apple's releases and definitions, and the platform overrides
+	}
 	if t, ok := c.Full["t"].(string); ok {
 		return t == r.Tenant
 	}
@@ -213,72 +243,6 @@ func (r *Relay) mine(c *changed) bool {
 	return false
 }
 
-// mapChange turns a change into an event, or nil when it is not one worth publishing. Only identifiers and states leave the database here.
-func (r *Relay) mapChange(c *changed) *Event {
-	ev := func(typ, key string, data map[string]any) *Event {
-		return &Event{Type: typ, Key: key, Data: data, At: time.Unix(int64(c.At.T), 0).UTC(), Origin: r.origin()}
-	}
-	insert := c.Operation == "insert"
-	update := c.Operation == "update" || c.Operation == "replace"
-	switch c.NS.Coll {
-	case "enrollments":
-		id := str(c.Full, "id")
-		if id == "" {
-			return nil
-		}
-		if insert {
-			return ev("enrollment.created", id, map[string]any{"enrollment": id, "type": str(c.Full, "type")})
-		}
-		if update {
-			if en, ok := c.Description.Updated["enabled"].(bool); ok && !en {
-				return ev("enrollment.checkout", id, map[string]any{"enrollment": id})
-			}
-		}
-	case "enrollment_queue":
-		id, uuid := str(c.Full, "id"), str(c.Full, "command_uuid")
-		if id == "" {
-			return nil
-		}
-		if insert {
-			return ev("command.queued", id, map[string]any{"enrollment": id, "command_uuid": uuid})
-		}
-		if st, ok := c.Description.Updated["status"].(string); ok && update && st != "" {
-			return ev("command.result", id, map[string]any{"enrollment": id, "command_uuid": uuid, "status": st})
-		}
-	case "bp_applied":
-		if insert || update {
-			dev := str(c.Full, "device")
-			if _, changedState := c.Description.Updated["state"]; dev == "" || (update && !changedState) {
-				return nil
-			}
-			return ev("application.state", dev, map[string]any{"device": dev, "blueprint": str(c.Full, "blueprint"), "item": str(c.Full, "item"), "state": str(c.Full, "state")})
-		}
-	case "bp_blueprints":
-		if insert || update || c.Operation == "delete" {
-			id := str(c.Full, "id")
-			if id == "" {
-				if k, ok := c.DocumentKey.ID.(string); ok {
-					id = k[strings.LastIndex(k, "\x1f")+1:]
-				}
-			}
-			typ := "blueprint.saved"
-			if c.Operation == "delete" {
-				typ = "blueprint.deleted"
-			}
-			return ev(typ, id, map[string]any{"blueprint": id})
-		}
-	case "dep_devices":
-		if insert {
-			serial := str(c.Full, "serial_number")
-			if serial == "" {
-				serial = str(c.Full, "serial")
-			}
-			return ev("dep.device.assigned", serial, map[string]any{"serial": serial})
-		}
-	}
-	return nil
-}
-
 // eventID is the same for the same change however many times it is read.
 func eventID(c *changed) string {
 	h := sha256.Sum256(c.ID)
@@ -286,13 +250,15 @@ func eventID(c *changed) string {
 }
 
 // lease takes or renews the relay lease; false when another process holds it.
-func (r *Relay) lease(ctx context.Context) (bool, error) {
+func (r *Relay) lease(ctx context.Context) (bool, error) { return r.leaseNamed(ctx, "lease") }
+
+func (r *Relay) leaseNamed(ctx context.Context, name string) (bool, error) {
 	d := r.LeaseFor
 	if d == 0 {
 		d = 30 * time.Second
 	}
 	now := r.now()
-	id := r.key("lease")
+	id := r.key(name)
 	_, err := r.DB.Collection("relay_state").UpdateOne(ctx, // tenant-ok: the _id is tenant-prefixed by r.key
 		bson.D{{Key: "_id", Value: id}, {Key: "$or", Value: bson.A{bson.D{{Key: "holder", Value: r.Holder}}, bson.D{{Key: "expires_at", Value: bson.D{{Key: "$lt", Value: now}}}}}}},
 		bson.D{{Key: "$set", Value: bson.D{{Key: "holder", Value: r.Holder}, {Key: "expires_at", Value: now.Add(d)}}}}, options.UpdateOne().SetUpsert(true))
@@ -352,10 +318,19 @@ func (r *Relay) watch(ctx context.Context) error {
 	if tok := r.loadToken(ctx); tok != nil {
 		opts.SetResumeAfter(tok)
 	}
-	pipeline := mongo.Pipeline{{{Key: "$match", Value: bson.D{
-		{Key: "ns.coll", Value: bson.D{{Key: "$in", Value: bson.A{"enrollments", "enrollment_queue", "bp_applied", "bp_blueprints", "dep_devices"}}}},
+	match := bson.D{
+		{Key: "ns.coll", Value: bson.D{{Key: "$in", Value: toAny(watched)}}},
 		{Key: "operationType", Value: bson.D{{Key: "$in", Value: bson.A{"insert", "update", "replace", "delete"}}}},
-	}}}}
+	}
+	if r.Tenant != "" {
+		// only this tenant's changes (by the tenant on the document or the tenant prefix of its id), plus the collections every tenant shares
+		match = append(match, bson.E{Key: "$or", Value: bson.A{
+			bson.D{{Key: "fullDocument.t", Value: r.Tenant}},
+			bson.D{{Key: "documentKey._id", Value: bson.D{{Key: "$regex", Value: "^" + regexQuote(r.Tenant+"\x1f")}}}},
+			bson.D{{Key: "ns.coll", Value: bson.D{{Key: "$in", Value: bson.A{"os_releases", "schema_sets", "applicability"}}}}},
+		}})
+	}
+	pipeline := mongo.Pipeline{{{Key: "$match", Value: match}}}
 	cs, err := r.DB.Watch(ctx, pipeline, opts)
 	if err != nil {
 		return err
@@ -384,9 +359,9 @@ func (r *Relay) watch(ctx context.Context) error {
 		}
 		c.ID = cs.ResumeToken()
 		if r.mine(&c) {
-			if e := r.mapChange(&c); e != nil {
-				e.ID = eventID(&c)
-				if err := r.publish(ctx, *e); err != nil {
+			for i, e := range r.mapChange(&c) {
+				e.ID = fmt.Sprintf("%s.%d", eventID(&c), i)
+				if err := r.emit(ctx, e); err != nil {
 					return err
 				}
 			}
@@ -398,22 +373,54 @@ func (r *Relay) watch(ctx context.Context) error {
 	return cs.Err()
 }
 
-// publish retries a failed delivery with a growing pause, so a bus that is briefly away delays events and does not lose them.
-func (r *Relay) publish(ctx context.Context, e Event) error {
-	pause := 500 * time.Millisecond
-	for {
-		err := r.Out.Publish(ctx, e)
-		if err == nil {
-			return nil
+// emit logs an event and hands it to the sinks.
+func (r *Relay) emit(ctx context.Context, e Event) error {
+	if r.Store != nil {
+		stored, _, err := r.Store.Append(ctx, e)
+		if err != nil {
+			return err
 		}
-		r.logf("publish %s: %v", e.Type, err)
+		e = stored
+	}
+	if r.Hooks.Event != nil {
+		r.Hooks.Event(e.Type)
+	}
+	for _, sink := range r.Sinks {
+		if Match(sink.Types, e.Type) {
+			r.publish(ctx, sink, e)
+		}
+	}
+	return ctx.Err()
+}
+
+// publish retries a failed delivery with a growing pause, so a bus that is briefly away delays events and does not lose them.
+func (r *Relay) publish(ctx context.Context, sink Sink, e Event) {
+	pause := 500 * time.Millisecond
+	for ctx.Err() == nil {
+		start := time.Now()
+		err := sink.Out.Publish(ctx, e)
+		if r.Hooks.Publish != nil {
+			r.Hooks.Publish(sink.Name, e.Type, err == nil, time.Since(start))
+		}
+		if err == nil {
+			return
+		}
+		r.logf("publish %s to %s: %v", e.Type, sink.Name, err)
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return
 		case <-time.After(pause):
 		}
 		if pause < 30*time.Second {
 			pause *= 2
 		}
 	}
+}
+
+func toAny(s []string) bson.A {
+	out := make(bson.A, len(s))
+	for i, v := range s {
+		out[i] = v
+	}
+	return out
 }

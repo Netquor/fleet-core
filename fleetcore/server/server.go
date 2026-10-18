@@ -33,6 +33,7 @@ import (
 	"github.com/micromdm/nanomdm/fleetcore/enroll"
 	"github.com/micromdm/nanomdm/fleetcore/osreleases"
 	"github.com/micromdm/nanomdm/fleetcore/pki"
+	"github.com/micromdm/nanomdm/fleetcore/relay"
 	"github.com/micromdm/nanomdm/fleetcore/schemas"
 	"github.com/micromdm/nanomdm/fleetcore/seal"
 	"github.com/micromdm/nanomdm/fleetcore/userauth"
@@ -131,6 +132,12 @@ type Config struct {
 	ADERoots *x509.CertPool
 	// VPPBaseURL and AppStoreLookupURL override Apple's Apps and Books and App Store catalog endpoints (tests).
 	VPPBaseURL, AppStoreLookupURL string
+	// RelaySinks receive the events (NATS, a webhook...) in addition to the event log and the subscriptions, which are always on with the management API.
+	RelaySinks []relay.Sink
+	// RelayHooks lets a metrics layer watch the relay.
+	RelayHooks relay.Hooks
+	// EventsAllowPrivate lets event subscriptions point at private and loopback addresses (and plain http there); by default they cannot.
+	EventsAllowPrivate bool
 	// UserAuth turns on the UserAuthenticate handshake for network and mobile users (macOS bound to a directory, Shared iPad). Nil: users are declined (or the zero-length challenge).
 	UserAuth *UserAuthConfig
 	// ACME turns on the ACME server with device attestation (/acme). Nil: off.
@@ -204,6 +211,9 @@ type Server struct {
 	DEP *dep.Service
 	// Blueprints keeps devices matching their blueprints; Run starts it.
 	Blueprints *blueprints.Engine
+	// Relay turns database changes into events (the log, the sinks, the subscriptions); Dispatcher delivers the log to subscriptions. Both are nil without the management API; run both.
+	Relay      *relay.Relay
+	Dispatcher *relay.Dispatcher
 	sealer     seal.Interface
 	bpStore    *blueprints.Store
 	ddmStore   *ddm.Store
@@ -550,6 +560,8 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 
 	// ---- management API ----
 	var depSvc *dep.Service
+	var eventRelay *relay.Relay
+	var eventDispatcher *relay.Dispatcher
 	if cfg.APIKey != "" || len(cfg.APIKeys) > 0 || cfg.AdminCA != nil {
 		depStore, err := dep.New(ctx, cfg.PKIDB, cfg.PKITenant, cfg.CAPass)
 		if err != nil {
@@ -638,12 +650,23 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		mux.Handle("/v1/vpp/", vppHandler)
 		wfAPI := &workflows.API{S: wf, Bootstrap: bootstrap}
 		bpHandler := adminAuth(http.StripPrefix("/v1", wfAPI.Handler(bpAPI.Handler())))
+		// ---- events: the log, the sinks, subscriptions ----
+		evStore, err := relay.NewStore(ctx, cfg.PKIDB, cfg.PKITenant, sealer)
+		if err != nil {
+			return nil, fmt.Errorf("events: %w", err)
+		}
+		eventRelay = &relay.Relay{DB: cfg.PKIDB, Tenant: cfg.PKITenant, Store: evStore, Sinks: cfg.RelaySinks, Hooks: cfg.RelayHooks, Logger: logger.With("service", "relay")}
+		eventDispatcher = &relay.Dispatcher{Relay: eventRelay, Store: evStore, Client: relay.SafeClient(cfg.EventsAllowPrivate)}
+		evHandler := adminAuth(http.StripPrefix("/v1", (&relay.API{Store: evStore, Dispatcher: eventDispatcher, AllowPrivate: cfg.EventsAllowPrivate}).Handler()))
+		for _, p := range []string{"/v1/events", "/v1/events/", "/v1/event-subscriptions", "/v1/event-subscriptions/"} {
+			mux.Handle(p, evHandler)
+		}
 		for _, p := range []string{"/v1/blueprints", "/v1/blueprints/", "/v1/groups", "/v1/groups/", "/v1/devices", "/v1/devices/", "/v1/applicability", "/v1/applicability/", "/v1/schemas", "/v1/schemas/", "/v1/os-releases", "/v1/os-releases/", "/v1/ddm/"} {
 			mux.Handle(p, bpHandler)
 		}
 	}
 
-	return &Server{Handler: trace.NewTraceLoggingHandler(mux, logger.With("handler", "log"), newTraceID), CAPool: pool, Depot: depot, DEP: depSvc, Blueprints: engine, sealer: sealer, bpStore: bpStore, ddmStore: ddmStore, releases: relFeed, schemaFeed: schemaFeed, cfg: cfg}, nil
+	return &Server{Relay: eventRelay, Dispatcher: eventDispatcher, Handler: trace.NewTraceLoggingHandler(mux, logger.With("handler", "log"), newTraceID), CAPool: pool, Depot: depot, DEP: depSvc, Blueprints: engine, sealer: sealer, bpStore: bpStore, ddmStore: ddmStore, releases: relFeed, schemaFeed: schemaFeed, cfg: cfg}, nil
 }
 
 // TLSConfig for a listener that terminates TLS here: the given certificate (a public one devices trust), and a request for a client certificate, which is checked by the MDM handlers

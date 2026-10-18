@@ -82,6 +82,10 @@ func TestEnrollEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	relayCtx, stopRelay := context.WithCancel(ctx)
+	defer stopRelay()
+	go func() { _ = srv.Relay.Run(relayCtx) }()
+	go srv.Dispatcher.Run(relayCtx)
 	ts := httptest.NewUnstartedServer(srv.Handler)
 	ts.TLS = &tls.Config{ClientAuth: tls.RequestClientCert, MinVersion: tls.VersionTLS12}
 	ts.StartTLS()
@@ -557,6 +561,14 @@ func TestEnrollEndToEnd(t *testing.T) {
 	keyed.SetBasicAuth("alice", "alice-secret-key-124")
 	if r, err := (&http.Client{Transport: &http.Transport{TLSClientConfig: insecure}}).Do(keyed); err != nil || r.StatusCode != 401 {
 		t.Errorf("a wrong key was accepted: %v", err)
+	}
+	// the event log has what happened, in order, and the catalog describes the types
+	waitFor("enrollment events", func() bool {
+		code, b := api("GET", "/v1/events?types=enrollment.*,device.enrolled", "")
+		return code == 200 && strings.Contains(b, "enrollment.created") && strings.Contains(b, "device.enrolled")
+	})
+	if code, b := api("GET", "/v1/events/types", ""); code != 200 || !strings.Contains(b, "command.result") {
+		t.Errorf("event types: %d %.200s", code, b)
 	}
 	if code, b := api("GET", "/v1/ddm/translate/coverage", ""); code != 200 || !strings.Contains(b, "com.apple.mail.managed") {
 		t.Errorf("translate coverage: %d %.300s", code, b)

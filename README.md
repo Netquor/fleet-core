@@ -21,7 +21,7 @@ FLEETCORE_MASTER_KEY=<the key> \
 docker compose -f deploy/fleetcore/compose.yaml up --build
 ```
 
-See [docs/fleetcore.md](docs/fleetcore.md) (running it, configuration, tenancy, every feature and its API) and [docs/fleetcore-roadmap.md](docs/fleetcore-roadmap.md) (what is built and what is not). Nothing in fleetcore has yet been run against real devices, Apple Business Manager or the App Store.
+See [docs/fleetcore.md](docs/fleetcore.md) (running it, configuration, tenancy, every feature), [docs/api-reference.md](docs/api-reference.md) (every endpoint) and [docs/fleetcore-roadmap.md](docs/fleetcore-roadmap.md) (what is built and what is not). Nothing in fleetcore has yet been run against real devices, Apple Business Manager or the App Store.
 
 ## Getting started & Documentation
 

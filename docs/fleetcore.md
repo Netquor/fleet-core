@@ -2,7 +2,7 @@
 
 fleetcore is an Apple MDM in one binary, built on NanoMDM and MongoDB: the MDM protocol, a SCEP certificate authority, enrollment profiles, TLS, Automated Device Enrollment, a JSON command API, blueprints (desired state with groups and staged rollouts), declarative device management, software update enforcement, and platform-aware profiles. It follows Apple's published definitions as they change. It stands alone: it needs a MongoDB replica set, an Apple push certificate and a public HTTPS name, and nothing else. Any product can manage it through its HTTP API.
 
-What is in the roadmap and what is not yet built is in [fleetcore-roadmap.md](fleetcore-roadmap.md).
+Every endpoint is in [api-reference.md](api-reference.md). What is in the roadmap and what is not yet built is in [fleetcore-roadmap.md](fleetcore-roadmap.md).
 
 ## Run it
 

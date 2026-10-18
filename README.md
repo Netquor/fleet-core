@@ -23,7 +23,7 @@ A brief overview of the various command-line switches and HTTP endpoints and API
 
 ## Features
 
-- Horizontal scaling: zero/minimal local state. Persistence in storage layers. MySQL and PostgreSQL backends provided in the box.
+- Horizontal scaling: zero/minimal local state. Persistence in storage layers. MySQL, PostgreSQL and MongoDB backends provided in the box (this fork adds MongoDB).
 - Multiple APNs topics: potentially multi-tenant.
 - Multi-command targeting: send the same command (or pushes) to multiple enrollments without individually queuing commands.
 - Migration endpoint: allow migrating MDM enrollments between storage backends or (supported) MDM servers

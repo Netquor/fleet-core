@@ -2,6 +2,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/micromdm/nanomdm/storage/diskv"
 	"github.com/micromdm/nanomdm/storage/file"
 	"github.com/micromdm/nanomdm/storage/inmem"
+	"github.com/micromdm/nanomdm/storage/mongodb"
 	"github.com/micromdm/nanomdm/storage/mysql"
 	"github.com/micromdm/nanomdm/storage/pgsql"
 
@@ -94,6 +96,12 @@ func (s *Storage) Parse(logger log.Logger) (storage.AllStorage, error) {
 				return nil, err
 			}
 			mdmStorage = append(mdmStorage, pgsqlStorage)
+		case "mongodb":
+			mongoStorage, err := mongodbStorageConfig(dsn, options, logger)
+			if err != nil {
+				return nil, err
+			}
+			mdmStorage = append(mdmStorage, mongoStorage)
 		case "inmem":
 			if options != "" {
 				return nil, ErrNoStorageOptions
@@ -197,4 +205,44 @@ func pgsqlStorageConfig(dsn, options string, logger log.Logger) (*pgsql.PgSQLSto
 		}
 	}
 	return pgsql.New(opts...)
+}
+
+// mongodbStorageConfig sets up the MongoDB backend. The DSN is a MongoDB connection string (mongodb:// or mongodb+srv://); it needs a replica set,
+// because commands are queued in transactions. Options: delete=1 (delete a command once acknowledged), database=<name> (default: the one in the
+// DSN's path, else "nanomdm"), noindex=1 (do not create indexes at startup).
+func mongodbStorageConfig(dsn, options string, logger log.Logger) (*mongodb.MongoDBStorage, error) {
+	if dsn == "" {
+		return nil, ErrMissingDSN
+	}
+	logger = logger.With("storage", "mongodb")
+	opts := []mongodb.Option{mongodb.WithURI(dsn), mongodb.WithLogger(logger)}
+	if options != "" {
+		for k, v := range splitOptions(options) {
+			switch k {
+			case "delete":
+				if v == "1" {
+					opts = append(opts, mongodb.WithDeleteCommands())
+					logger.Debug("msg", "deleting commands")
+				} else if v != "0" {
+					return nil, fmt.Errorf("invalid value for delete option: %q", v)
+				}
+			case "database":
+				if v == "" {
+					return nil, errors.New("empty value for database option")
+				}
+				opts = append(opts, mongodb.WithDatabase(v))
+			case "noindex":
+				if v == "1" {
+					opts = append(opts, mongodb.WithoutIndexes())
+				} else if v != "0" {
+					return nil, fmt.Errorf("invalid value for noindex option: %q", v)
+				}
+			default:
+				return nil, fmt.Errorf("invalid option: %q", k)
+			}
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return mongodb.New(ctx, opts...)
 }

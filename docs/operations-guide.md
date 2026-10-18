@@ -142,6 +142,26 @@ Options are specified as a comma-separated list of "key=value" pairs. The pgsql 
 
 *Example:* `-storage pgsql -storage-dsn postgres://postgres:toor@localhost/nanomdm -storage-options delete=1`
 
+#### mongodb storage backend
+
+* `-storage mongodb`
+
+Configures the MongoDB storage backend. The `-storage-dsn` flag is a [MongoDB connection string](https://www.mongodb.com/docs/manual/reference/connection-string/) (`mongodb://` or `mongodb+srv://`); the database is the one named in its path (else `nanomdm`). Collections and indexes are created automatically at startup (`noindex=1` turns that off for deployments where an admin manages indexes); the collections mirror the SQL tables (`devices`, `users`, `enrollments`, `commands`, `command_results`, `enrollment_queue`, `push_certs`, `cert_auth_associations`). MongoDB 5.0 or later, **running as a replica set** (a single-node one is fine): a command and its queue entries are written in a transaction, which a standalone `mongod` does not offer.
+
+*Example:* `-storage mongodb -storage-dsn 'mongodb://user:pass@db1,db2,db3/nanomdm?replicaSet=rs0&tls=true'`
+
+The mongodb backend supports these options (comma-separated "key=value" pairs):
+* `delete=1`, `delete=0`
+    * As for the SQL backends: delete commands, queue entries and responses after an enrollment has responded (other than NotNow).
+* `database=<name>`
+    * The database to use, overriding the DSN's.
+* `noindex=1`
+    * Do not create indexes at startup.
+
+*Example:* `-storage mongodb -storage-dsn mongodb://localhost/nanomdm?replicaSet=rs0 -storage-options delete=1,database=mdm`
+
+Tests: `NANOMDM_MONGODB_STORAGE_TEST_URI='mongodb://127.0.0.1:27017/nanomdm_test?replicaSet=rs0' go test ./storage/mongodb` runs the shared end-to-end suite against a scratch database (it is dropped first).
+
 #### in-memory storage backend
 
 * `-storage inmem`

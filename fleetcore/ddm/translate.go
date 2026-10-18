@@ -1,7 +1,11 @@
 package ddm
 
 import (
+	"bytes"
+	"crypto/sha256"
 	_ "embed"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -22,6 +26,22 @@ type alias struct {
 	Approximate bool           `json:"approximate,omitempty"`
 	Note        string         `json:"note,omitempty"`
 	Values      map[string]any `json:"values,omitempty"` // profile value (as text) to declaration value
+	// Lift translates the keys of a nested profile dictionary as if they sat at the top (the profile wraps IKEv2 settings in an IKEv2 dictionary).
+	Lift bool `json:"lift,omitempty"`
+	// Ref marks a value that is the PayloadUUID of a certificate payload in the same profile; it becomes a reference to the asset that payload translates to.
+	Ref bool `json:"ref,omitempty"`
+	// Decl limits the alias to one declaration type (a payload that several declarations replace).
+	Decl string `json:"decl,omitempty"`
+	// Ignore marks a key that only selects how the payload is translated and has nothing to carry over.
+	Ignore bool `json:"ignore,omitempty"`
+}
+
+// Asset is data a translated declaration refers to by "$asset:<ID>": the caller adds it to the blueprint as an asset item.
+type Asset struct {
+	ID              string `json:"id"`
+	DeclarationType string `json:"declaration_type"`
+	ContentType     string `json:"content_type"`
+	Data            []byte `json:"data"`
 }
 
 // Translation is a configuration profile payload expressed as a declaration.
@@ -35,7 +55,12 @@ type Translation struct {
 	// Untranslated lists profile keys that are not in Payload and need a person's decision; Reasons says why where it is known.
 	Untranslated []string          `json:"untranslated,omitempty"`
 	Reasons      map[string]string `json:"reasons,omitempty"`
+	// Assets are what the payload referred to by value (a certificate, an identity) now lives in; Payload points at them.
+	Assets []Asset `json:"assets,omitempty"`
 }
+
+// CertAssetID is the asset id a certificate payload gets, from its PayloadUUID, so other payloads of the profile can refer to it.
+func CertAssetID(payloadUUID string) string { return "cert-" + strings.ToLower(payloadUUID) }
 
 func norm(s string) string {
 	var b strings.Builder
@@ -135,6 +160,20 @@ func (t *translator) object(in map[string]any, defs []schemas.Key, prefix string
 		}
 		top := prefix == ""
 		a, hasAlias := t.aliases[path]
+		if hasAlias && a.Decl != "" && a.Decl != t.tr.Declaration {
+			hasAlias = false
+		}
+		if hasAlias && a.Ignore {
+			t.claimed[key] = true
+			continue
+		}
+		if hasAlias && a.Lift {
+			if m, ok := val.(map[string]any); ok && prefix == "" {
+				t.claimed[key] = true
+				t.object(m, defs, path+".", out)
+			}
+			continue
+		}
 		var def schemas.Key
 		var found bool
 		target := key
@@ -170,6 +209,11 @@ func (t *translator) object(in map[string]any, defs []schemas.Key, prefix string
 					t.tr.Approximate[path] = a.Note
 				}
 				continue
+			}
+			if a.Ref {
+				if u, ok := val.(string); ok {
+					val = "$asset:" + CertAssetID(u)
+				}
 			}
 			if a.Values != nil {
 				mapped, ok := a.Values[fmt.Sprint(val)]
@@ -332,6 +376,62 @@ func (t *translator) finish() {
 	}
 }
 
+// certificateKinds are the profile payloads that carry a certificate or identity by value; the declaration refers to an asset that holds it instead.
+const vpnIKEv2 = "com.apple.configuration.network.vpn.ikev2"
+
+var certificateKinds = map[string]string{
+	"com.apple.security.pem":    "com.apple.asset.credential.certificate",
+	"com.apple.security.root":   "com.apple.asset.credential.certificate",
+	"com.apple.security.pkcs1":  "com.apple.asset.credential.certificate",
+	"com.apple.security.pkcs12": "com.apple.asset.credential.identity",
+}
+
+func bytesOf(v any) ([]byte, bool) {
+	switch d := v.(type) {
+	case []byte:
+		return d, len(d) > 0
+	case string: // JSON carries data as base64
+		b, err := base64.StdEncoding.DecodeString(d)
+		return b, err == nil && len(b) > 0
+	}
+	return nil, false
+}
+
+// certificate turns a certificate payload into an asset (the bytes) and the configuration that refers to it.
+func (t *translator) certificate(payload map[string]any, assetType string, def *schemas.Declaration) {
+	data, ok := bytesOf(payload["PayloadContent"])
+	if !ok {
+		t.unmapped("PayloadContent", "the payload has no certificate data")
+		return
+	}
+	uuid, _ := payload["PayloadUUID"].(string)
+	id := CertAssetID(uuid)
+	if uuid == "" {
+		sum := sha256.Sum256(data)
+		id = "cert-" + hex.EncodeToString(sum[:4])
+	}
+	content := "application/pkix-cert"
+	switch {
+	case assetType == "com.apple.asset.credential.identity":
+		content = "application/x-pkcs12"
+		if pw, _ := payload["Password"].(string); pw != "" {
+			t.unmapped("Password", "an identity asset has no password field: export the identity without a password, or keep this one in a profile")
+			return
+		}
+	case bytes.HasPrefix(bytes.TrimSpace(data), []byte("-----BEGIN")):
+		content = "application/x-pem-file"
+	}
+	t.tr.Assets = append(t.tr.Assets, Asset{ID: id, DeclarationType: assetType, ContentType: content, Data: data})
+	t.tr.Payload["CredentialAssetReference"] = "$asset:" + id
+	t.tr.Approximate["PayloadContent"] = "the certificate moved to the asset " + id + " (content type " + content + ", chosen from the data; confirm on a device)"
+	t.claimed["PayloadContent"] = true
+	if k, ok := findKey(def.Keys, "KeyIsExtractable"); ok {
+		if v, ok := payload[k.Key].(bool); ok {
+			t.tr.Payload[k.Key] = v
+		}
+	}
+}
+
 func translateOne(payloadType string, payload map[string]any, declType string, set *schemas.Set) (*Translation, map[string]bool, bool) {
 	def, ok := set.Declaration(declType)
 	if !ok {
@@ -342,7 +442,11 @@ func translateOne(payloadType string, payload map[string]any, declType string, s
 		tr:      &Translation{Declaration: declType, Payload: map[string]any{}, Approximate: map[string]string{}},
 		claimed: map[string]bool{},
 	}
-	t.object(payload, def.Keys, "", t.tr.Payload)
+	if kind, ok := certificateKinds[payloadType]; ok {
+		t.certificate(payload, kind, def)
+	} else {
+		t.object(payload, def.Keys, "", t.tr.Payload)
+	}
 	t.finish()
 	return t.tr, t.claimed, true
 }
@@ -378,6 +482,16 @@ func TranslateAll(payloadType string, payload map[string]any, set *schemas.Set) 
 	equiv := Equivalents()[payloadType]
 	if len(equiv) == 0 {
 		return nil, false
+	}
+	if payloadType == "com.apple.vpn.managed" {
+		// The VPN declarations are one per kind; the payload says which kind it is. Only IKEv2 is translated.
+		kept := equiv[:0:0]
+		for _, e := range equiv {
+			if t, _ := payload["VPNType"].(string); t == "IKEv2" && e == vpnIKEv2 || t != "IKEv2" && e != vpnIKEv2 {
+				kept = append(kept, e)
+			}
+		}
+		equiv = kept
 	}
 	var out []*Translation
 	claimedBy := map[string]bool{}
@@ -473,7 +587,11 @@ func Coverage(set *schemas.Set) []CoverageRow {
 				continue
 			}
 			for _, k := range prof.Keys {
-				if a, has := table[pt][k.Key]; has {
+				if _, isCert := certificateKinds[pt]; isCert && k.Key == "PayloadContent" {
+					claimed[k.Key] = dt
+				} else if _, isCert := certificateKinds[pt]; isCert && k.Key == "Password" {
+					explained[k.Key] = true
+				} else if a, has := table[pt][k.Key]; has {
 					if a.To == "" {
 						explained[k.Key] = true
 					} else if _, ok := resolve(decl.Keys, a.To); ok && claimed[k.Key] == "" {

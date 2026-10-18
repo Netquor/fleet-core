@@ -1,6 +1,7 @@
 package ddm
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -137,8 +138,16 @@ func TestAliasesFollowTheSchemas(t *testing.T) {
 				t.Errorf("%s: profile key %s is not in the schema", pt, from)
 			}
 			if a.To == "" {
-				if a.Note == "" {
+				if a.Note == "" && !a.Ignore && !a.Lift {
 					t.Errorf("%s: %s has no counterpart and no reason", pt, from)
+				}
+				continue
+			}
+			if strings.HasPrefix(from, "IKEv2.") && a.Decl != "" { // lifted: the target is a path in the declaration
+				if d, _ := set.Declaration(a.Decl); d == nil {
+					t.Errorf("%s: %s names a declaration the schemas lack", pt, from)
+				} else if _, ok := resolve(d.Keys, a.To); !ok {
+					t.Errorf("%s: %s -> %s is not in %s", pt, from, a.To, a.Decl)
 				}
 				continue
 			}
@@ -174,5 +183,81 @@ func TestCoverageReport(t *testing.T) {
 		if r.PayloadType == "com.apple.mail.managed" && r.Translated < 15 {
 			t.Errorf("mail coverage %+v", r)
 		}
+	}
+}
+
+func TestTranslateCertificateToAsset(t *testing.T) {
+	set := schemas.Embedded()
+	pemData := []byte("-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n")
+	tr, ok := Translate("com.apple.security.root", map[string]any{"PayloadUUID": "AAAA-1", "PayloadContent": pemData}, "", set)
+	if !ok || len(tr.Assets) != 1 {
+		t.Fatalf("%+v", tr)
+	}
+	a := tr.Assets[0]
+	if a.ID != "cert-aaaa-1" || a.DeclarationType != "com.apple.asset.credential.certificate" || a.ContentType != "application/x-pem-file" || string(a.Data) != string(pemData) {
+		t.Errorf("asset %+v", a)
+	}
+	if tr.Payload["CredentialAssetReference"] != "$asset:cert-aaaa-1" || tr.Declaration != "com.apple.configuration.security.certificate" {
+		t.Errorf("payload %v", tr.Payload)
+	}
+	// an identity with a password cannot move: the asset has nowhere to put it
+	tr, _ = Translate("com.apple.security.pkcs12", map[string]any{"PayloadUUID": "B", "PayloadContent": []byte{1, 2, 3}, "Password": "secret"}, "", set)
+	if len(tr.Assets) != 0 || tr.Reasons["Password"] == "" || strings.Contains(fmt.Sprint(tr), "secret") {
+		t.Errorf("password: %+v", tr)
+	}
+	tr, _ = Translate("com.apple.security.pkcs12", map[string]any{"PayloadUUID": "B", "PayloadContent": []byte{1, 2, 3}}, "", set)
+	if len(tr.Assets) != 1 || tr.Assets[0].DeclarationType != "com.apple.asset.credential.identity" || tr.Assets[0].ContentType != "application/x-pkcs12" {
+		t.Errorf("identity: %+v", tr)
+	}
+}
+
+func TestTranslateIKEv2VPN(t *testing.T) {
+	set := schemas.Embedded()
+	trs, ok := TranslateAll("com.apple.vpn.managed", map[string]any{
+		"VPNType": "IKEv2", "UserDefinedName": "Office",
+		"IKEv2": map[string]any{
+			"RemoteAddress": "vpn.example.com", "LocalIdentifier": "me", "RemoteIdentifier": "vpn.example.com",
+			"AuthenticationMethod": "Certificate", "PayloadCertificateUUID": "ABC-1", "CertificateType": "ECDSA256",
+			"EnablePFS": uint64(1), "DisableMOBIKE": uint64(0), "MTU": uint64(1400), "IncludeAllNetworks": uint64(1),
+			"DeadPeerDetectionRate": "Medium", "SharedSecret": "s3cret",
+			"IKESecurityAssociationParameters": map[string]any{"EncryptionAlgorithm": "AES-256-GCM", "DiffieHellmanGroup": uint64(19)},
+			"ChildSecurityAssociationParameters": map[string]any{"EncryptionAlgorithm": "3DES"},
+		},
+		"DNS": map[string]any{"ServerAddresses": []any{"10.0.0.1"}},
+	}, set)
+	if !ok || len(trs) != 1 || trs[0].Declaration != vpnIKEv2 {
+		t.Fatalf("%+v", trs)
+	}
+	p := trs[0].Payload
+	au, _ := p["Authentication"].(map[string]any)
+	nr, _ := p["NetworkRouting"].(map[string]any)
+	idle, _ := p["Idle"].(map[string]any)
+	ike, _ := p["IKESecurityAssociationParameters"].(map[string]any)
+	if p["VisibleName"] != "Office" || p["HostName"] != "vpn.example.com" || au["Method"] != "Certificate" || au["IdentityAssetReference"] != "$asset:cert-abc-1" ||
+		au["IdentityCertificateType"] != "ECDSA256" || p["EnablePFS"] != true || p["DisableMOBIKE"] != false || p["MTU"] != int64(1400) ||
+		nr["IncludeAllNetworks"] != true || idle["DeadPeerDetectionRate"] != "Medium" || ike["EncryptionAlgorithm"] != "AES-256-GCM" {
+		t.Errorf("payload %v", p)
+	}
+	if strings.Contains(fmt.Sprint(p), "s3cret") || trs[0].Reasons["IKEv2.SharedSecret"] == "" {
+		t.Errorf("secret handling: %v %v", p, trs[0].Reasons)
+	}
+	child, _ := p["ChildSecurityAssociationParameters"].(map[string]any)
+	if child["EncryptionAlgorithm"] != nil {
+		t.Errorf("3DES is not allowed by the declaration but was delivered: %v", child)
+	}
+	// a VPN of another kind is not forced into the IKEv2 declaration
+	trs, _ = TranslateAll("com.apple.vpn.managed", map[string]any{"VPNType": "IPSec", "UserDefinedName": "x"}, set)
+	for _, tr := range trs {
+		if tr.Declaration == vpnIKEv2 {
+			t.Error("an IPSec VPN was translated as IKEv2")
+		}
+	}
+}
+
+func TestCertificateReferencesFromOtherPayloads(t *testing.T) {
+	tr, _ := Translate("com.apple.dnsSettings.managed", map[string]any{"DNSSettings": map[string]any{"DNSProtocol": "TLS", "ServerName": "dns.example.com", "PayloadCertificateUUID": "ID-9"}}, "", schemas.Embedded())
+	ds, _ := tr.Payload["DNSSettings"].(map[string]any)
+	if ds["IdentityAssetReference"] != "$asset:"+CertAssetID("ID-9") || ds["ServerName"] != "dns.example.com" {
+		t.Errorf("%v", tr.Payload)
 	}
 }

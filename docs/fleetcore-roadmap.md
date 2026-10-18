@@ -152,6 +152,6 @@ Everything in the earlier plan is built. What is left, honestly:
 
 1. **Real devices**: the protocol, ADE, BYOD, attestation, VPP and Platform SSO are tested against Apple's schemas, documented behavior and fakes (including a synthetic attestation chain). None has run against a real device, Business Manager or the App Store yet.
 2. **Event relay**: one change stream (or outbox) from the cluster to a message bus, for products that want events.
-3. **Translator**: assets for certificates, SCEP, ACME and VPN; more restriction settings as Apple adds declarations (the coverage report lists what to look at).
+3. **Translator**: SCEP and ACME assets (needs Apple's credential document schema), the other VPN kinds; more restriction settings as Apple adds declarations (the coverage report lists what to look at).
 4. **UserAuthenticate** beyond the minimal digest round; **Platform SSO** presets for vendors other than Microsoft Entra.
 5. **Migration tooling** from other MDMs (device records, enrollments).

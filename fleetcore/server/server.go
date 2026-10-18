@@ -35,11 +35,13 @@ import (
 	"github.com/micromdm/nanomdm/fleetcore/pki"
 	"github.com/micromdm/nanomdm/fleetcore/schemas"
 	"github.com/micromdm/nanomdm/fleetcore/seal"
+	"github.com/micromdm/nanomdm/fleetcore/userauth"
 	"github.com/micromdm/nanomdm/fleetcore/vault"
 	"github.com/micromdm/nanomdm/fleetcore/vpp"
 	"github.com/micromdm/nanomdm/fleetcore/workflows"
 	httpapi "github.com/micromdm/nanomdm/http/api"
 	httpmdm "github.com/micromdm/nanomdm/http/mdm"
+	"github.com/micromdm/nanomdm/mdm"
 	"github.com/micromdm/nanomdm/push/nanopush"
 	pushsvc "github.com/micromdm/nanomdm/push/service"
 	"github.com/micromdm/nanomdm/service"
@@ -93,6 +95,12 @@ type Config struct {
 
 	CertSource CertSource
 	CertHeader string
+	// Migration mounts /v1/migration (management API): it takes the Authenticate, TokenUpdate and SetBootstrapToken check-ins of enrollments from another NanoMDM-family server (see
+	// cmd/nano2nano) and creates the enrollments here without a certificate check, so devices keep their enrollment when their MDM address moves.
+	Migration bool
+	// MigrateCAs (PEM) are the old server's device-identity CAs. While migrating, identity certificates they issued are accepted as well as this server's own; the devices get this
+	// server's certificate when they re-enroll their identity. Remove it once the fleet has moved.
+	MigrateCAs []byte
 	// AllowRetroactive lets a device that enrolled before certificates were checked be associated with one on its next check-in.
 	AllowRetroactive bool
 
@@ -120,6 +128,8 @@ type Config struct {
 	ADERoots *x509.CertPool
 	// VPPBaseURL and AppStoreLookupURL override Apple's Apps and Books and App Store catalog endpoints (tests).
 	VPPBaseURL, AppStoreLookupURL string
+	// UserAuth turns on the UserAuthenticate handshake for network and mobile users (macOS bound to a directory, Shared iPad). Nil: users are declined (or the zero-length challenge).
+	UserAuth *UserAuthConfig
 	// ACME turns on the ACME server with device attestation (/acme). Nil: off.
 	ACME *ACMEConfig
 	// MAIDDEPName is the DEP name whose key signs Managed Apple Account tokens; empty uses the only DEP name there is.
@@ -131,6 +141,37 @@ type Config struct {
 	Debug  bool
 	// Version is shown at /version.
 	Version string
+}
+
+// UserAuthConfig sets up the UserAuthenticate handshake.
+type UserAuthConfig struct {
+	// Realm is named in the challenge and in every stored digest hash.
+	Realm string
+	// Directory holds digest hashes (HA1) of the people the server accepts; Verifier asks a bridge that holds the passwords. At least one.
+	Directory userauth.Directory
+	Verifier  userauth.Verifier
+	// RequireToken refuses user-channel requests from a user who never completed the handshake. Without it only users who have a token are held to it.
+	RequireToken bool
+}
+
+// enforced puts the AuthToken check in front of the user channel's requests.
+type enforced struct {
+	service.CheckinAndCommandService
+	e *userauth.Enforcer
+}
+
+func (x enforced) TokenUpdate(r *mdm.Request, m *mdm.TokenUpdate) error {
+	if err := x.e.Check(r, m.AuthToken); err != nil {
+		return err
+	}
+	return x.CheckinAndCommandService.TokenUpdate(r, m)
+}
+
+func (x enforced) CommandAndReportResults(r *mdm.Request, m *mdm.CommandResults) (*mdm.Command, error) {
+	if err := x.e.Check(r, m.AuthToken); err != nil {
+		return nil, err
+	}
+	return x.CheckinAndCommandService.CommandAndReportResults(r, m)
 }
 
 // ACMEConfig sets up device identities by ACME with hardware attestation.
@@ -225,6 +266,12 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	pool := x509.NewCertPool()
 	pool.AddCert(caCert)
 	caPEM := cryptoutil.PEMCertificate(caCert.Raw)
+	if len(cfg.MigrateCAs) > 0 {
+		if !pool.AppendCertsFromPEM(cfg.MigrateCAs) {
+			return nil, errors.New("no certificate in the migration CA file")
+		}
+		caPEM = append(caPEM, cfg.MigrateCAs...)
+	}
 	verifier, err := certverify.NewPoolVerifier(caPEM, nil, x509.ExtKeyUsageClientAuth)
 	if err != nil {
 		return nil, err
@@ -243,9 +290,19 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	}
 	ddmSvc := &ddm.Service{Store: ddmStore}
 	tokenMux := nanomdm.NewTokenMux()
+	var uaService service.UserAuthenticate = nanomdm.NewUAService(cfg.Storage, false)
+	var uaEnforcer *userauth.Enforcer
+	if ua := cfg.UserAuth; ua != nil {
+		uaStore, err := userauth.NewStore(ctx, cfg.PKIDB, cfg.PKITenant)
+		if err != nil {
+			return nil, err
+		}
+		uaService = &userauth.Service{Store: uaStore, Realm: ua.Realm, Directory: ua.Directory, Verifier: ua.Verifier, Messages: cfg.Storage, Fallback: uaService}
+		uaEnforcer = &userauth.Enforcer{Store: uaStore, Require: ua.RequireToken}
+	}
 	nano := nanomdm.New(cfg.Storage,
 		nanomdm.WithDeclarativeManagement(ddmSvc),
-		nanomdm.WithUserAuthenticate(nanomdm.NewUAService(cfg.Storage, false)),
+		nanomdm.WithUserAuthenticate(uaService),
 		nanomdm.WithGetToken(tokenMux),
 		nanomdm.WithLogger(logger.With("service", "nanomdm")))
 	var popts []nanopush.Option
@@ -323,7 +380,11 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	if byodStore != nil {
 		observer.BYOD = byodStore
 	}
-	svcs := []service.CheckinAndCommandService{nano, observer}
+	var primary service.CheckinAndCommandService = nano
+	if uaEnforcer != nil {
+		primary = enforced{nano, uaEnforcer}
+	}
+	svcs := []service.CheckinAndCommandService{primary, observer}
 	if cfg.WebhookURL != "" {
 		whOpts := []webhook.Option{webhook.WithTokenUpdateTalley(cfg.Storage), webhook.WithEventID(trace.GetTraceID)}
 		if cfg.WebhookHMACKey != "" {
@@ -336,6 +397,7 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	if cfg.AllowRetroactive {
 		certOpts = append(certOpts, certauth.WithAllowRetroactive())
 	}
+	migrationService := mdmService
 	mdmService = certauth.New(mdmService, cfg.Storage, certOpts...)
 
 	mux := http.NewServeMux()
@@ -509,6 +571,10 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		apiAuth := nlhttp.NewMWMux(mux)
 		apiAuth.Use(func(h http.Handler) http.Handler { return adminAuth(h) })
 		httpapi.HandleAPIv1("/v1", apiAuth, logger, cfg.Storage, ps)
+
+		if cfg.Migration {
+			mux.Handle("/v1/migration", adminAuth(httpmdm.CheckinHandler(migrationService, logger.With("handler", "migration"))))
+		}
 
 		// ---- JSON command API ----
 		var results commands.ResultReader

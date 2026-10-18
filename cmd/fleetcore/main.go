@@ -18,9 +18,12 @@ import (
 	"github.com/micromdm/nanolib/log/stdlogfmt"
 	"github.com/micromdm/nanomdm/fleetcore/byod"
 	"github.com/micromdm/nanomdm/fleetcore/provision"
+	"github.com/micromdm/nanomdm/fleetcore/relay"
 	"github.com/micromdm/nanomdm/fleetcore/seal"
 	"github.com/micromdm/nanomdm/fleetcore/server"
+	"github.com/micromdm/nanomdm/fleetcore/userauth"
 	"github.com/micromdm/nanomdm/storage/mongodb"
+	"github.com/nats-io/nats.go"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 	"golang.org/x/crypto/acme/autocert"
@@ -53,6 +56,18 @@ func main() {
 		byodClaim  = flag.String("byod-claim", env("FLEETCORE_BYOD_CLAIM", "email"), "token claim that holds the person's Managed Apple Account")
 		byodLogin  = flag.String("byod-login-url", env("FLEETCORE_BYOD_LOGIN_URL", ""), "identity provider sign-in page for devices that have no token yet")
 		maidDEP    = flag.String("maid-dep", env("FLEETCORE_MAID_DEP", ""), "DEP name whose key signs Managed Apple Account tokens (default: the only one)")
+		uaRealm    = flag.String("ua-realm", env("FLEETCORE_UA_REALM", ""), "realm of the UserAuthenticate digest challenge for network and mobile users; turns that handshake on")
+		uaUsers    = flag.String("ua-users", env("FLEETCORE_UA_USERS", ""), "file of user:realm:ha1 lines (see: fleetcore ua-hash) the people are checked against")
+		uaVerify   = flag.String("ua-verify-url", env("FLEETCORE_UA_VERIFY_URL", ""), "bridge to your directory that checks a digest it holds the password for")
+		uaSecret   = flag.String("ua-verify-secret", env("FLEETCORE_UA_VERIFY_SECRET", ""), "bearer secret for the bridge")
+		uaRequire  = flag.Bool("ua-require-token", os.Getenv("FLEETCORE_UA_REQUIRE_TOKEN") != "", "refuse user-channel requests from a user who has not completed the handshake")
+		relayNATS  = flag.String("relay-nats", env("FLEETCORE_RELAY_NATS", ""), "NATS URL to publish events to (enrollments, commands, application state, blueprints, DEP assignments)")
+		relayPfx   = flag.String("relay-nats-prefix", env("FLEETCORE_RELAY_NATS_PREFIX", "fleetcore.events"), "subject prefix of the events: <prefix>.<type>.<key>")
+		relayJS    = flag.Bool("relay-jetstream", os.Getenv("FLEETCORE_RELAY_JETSTREAM") != "", "publish through JetStream with an acknowledgement (the stream must exist)")
+		relayHook  = flag.String("relay-webhook", env("FLEETCORE_RELAY_WEBHOOK", ""), "URL to post events to, signed with -relay-webhook-secret")
+		relaySec   = flag.String("relay-webhook-secret", env("FLEETCORE_RELAY_WEBHOOK_SECRET", ""), "HMAC secret that signs the webhook body")
+		migration  = flag.Bool("migration", os.Getenv("FLEETCORE_MIGRATION") != "", "accept enrollments from another NanoMDM-family server at /v1/migration (see nano2nano)")
+		migrateCA  = flag.String("migrate-ca", env("FLEETCORE_MIGRATE_CA", ""), "PEM file with the old server's device-identity CA(s); certificates they issued are accepted while devices move")
 		acmeOn     = flag.Bool("acme", os.Getenv("FLEETCORE_ACME") != "", "serve ACME with Apple device attestation at /acme (hardware-bound device identities)")
 		acmeEnroll = flag.Bool("acme-for-enrollment", os.Getenv("FLEETCORE_ACME_FOR_ENROLLMENT") != "", "enrollment profiles ask for the identity by ACME instead of SCEP (iOS 16, macOS 13.1 or later)")
 		acmeOpen   = flag.Bool("acme-allow-unassigned", os.Getenv("FLEETCORE_ACME_ALLOW_UNASSIGNED") != "", "any genuine Apple device may get a certificate, not only those assigned by Apple Business Manager")
@@ -135,6 +150,42 @@ func main() {
 	if *acmeOn || *acmeEnroll {
 		acmeCfg = &server.ACMEConfig{ForEnrollment: *acmeEnroll, AllowUnassigned: *acmeOpen}
 	}
+	var relaySink relay.Multi
+	if *relayNATS != "" {
+		nc, err := nats.Connect(*relayNATS, nats.Name("fleetcore-relay"), nats.MaxReconnects(-1))
+		if err != nil {
+			fatal(logger, fmt.Errorf("-relay-nats: %w", err))
+		}
+		defer nc.Close()
+		relaySink = append(relaySink, &relay.NATS{Conn: nc, Prefix: *relayPfx, Stream: *relayJS})
+	}
+	if *relayHook != "" {
+		relaySink = append(relaySink, &relay.Webhook{URL: *relayHook, Secret: []byte(*relaySec)})
+	}
+	var migrateCAs []byte
+	if *migrateCA != "" {
+		var err error
+		if migrateCAs, err = os.ReadFile(*migrateCA); err != nil {
+			fatal(logger, err)
+		}
+	}
+	var uaCfg *server.UserAuthConfig
+	if *uaRealm != "" {
+		uaCfg = &server.UserAuthConfig{Realm: *uaRealm, RequireToken: *uaRequire}
+		if *uaUsers != "" {
+			d, err := userauth.LoadFileDirectory(*uaUsers)
+			if err != nil {
+				fatal(logger, err)
+			}
+			uaCfg.Directory = d
+		}
+		if *uaVerify != "" {
+			uaCfg.Verifier = &userauth.HTTPVerifier{URL: *uaVerify, Secret: *uaSecret}
+		}
+		if uaCfg.Directory == nil && uaCfg.Verifier == nil {
+			fatal(logger, errors.New("-ua-realm needs -ua-users or -ua-verify-url"))
+		}
+	}
 	var byodCfg *server.BYODConfig
 	if *byodIssuer != "" {
 		if *byodJWKS == "" || *byodAud == "" {
@@ -144,12 +195,16 @@ func main() {
 	}
 	srv, err := server.New(ctx, server.Config{
 		BaseURL: *base, Organization: *org, Topic: *topic, Storage: store, PKIDB: mc.Database(*dbName), PKITenant: *tenant,
-		CAPass: *caPass, CertSource: server.CertSource(*source), CertHeader: *header, APIKey: *apiKey, Logger: logger, Debug: *debug, Version: version, NoFeeds: *noFeeds, Sealer: sealer, AdminCA: adminPool, BYOD: byodCfg, MAIDDEPName: *maidDEP, ACME: acmeCfg,
+		CAPass: *caPass, CertSource: server.CertSource(*source), CertHeader: *header, APIKey: *apiKey, Logger: logger, Debug: *debug, Version: version, NoFeeds: *noFeeds, Sealer: sealer, AdminCA: adminPool, BYOD: byodCfg, MAIDDEPName: *maidDEP, ACME: acmeCfg, UserAuth: uaCfg, Migration: *migration, MigrateCAs: migrateCAs,
 	})
 	if err != nil {
 		fatal(logger, err)
 	}
 
+	if len(relaySink) > 0 && !*rekey {
+		rl := &relay.Relay{DB: mc.Database(*dbName), Tenant: *tenant, Out: relaySink, Logger: logger.With("service", "relay")}
+		go func() { _ = rl.Run(ctx) }()
+	}
 	if *rekey {
 		res, err := srv.Rekey(ctx)
 		for k, v := range res {

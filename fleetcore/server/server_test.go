@@ -77,7 +77,7 @@ func TestEnrollEndToEnd(t *testing.T) {
 
 	srv, err := New(ctx, Config{
 		BaseURL: "https://mdm.test", Organization: "Test Org", ProfileIdentifier: "test.mdm.enroll", Topic: "com.apple.mgmt.External.test",
-		Storage: store, PKIDB: mc.Database("fleetcore_test"), PKITenant: "acme", CAPass: "correct horse", CertSource: CertFromTLS, APIKey: "apikey", Version: "test", NoFeeds: true, Sealer: ring.For("acme"),
+		Storage: store, PKIDB: mc.Database("fleetcore_test"), PKITenant: "acme", CAPass: "correct horse", CertSource: CertFromTLS, APIKey: "apikey", Version: "test", NoFeeds: true, Sealer: ring.For("acme"), Migration: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -480,6 +480,55 @@ func TestEnrollEndToEnd(t *testing.T) {
 	trBody, _ := json.Marshal(map[string]any{"profile": []byte(pwProfile)})
 	if code, b := api("POST", "/v1/ddm/translate", string(trBody)); code != 200 || !strings.Contains(b, `"MinimumLength":8`) || !strings.Contains(b, "unknownSetting") {
 		t.Errorf("translate: %d %.300s", code, b)
+	}
+	// A profile with an account, a root certificate and a SCEP identity becomes items of a blueprint, assets included, and saves.
+	mixed := `<?xml version="1.0"?><plist version="1.0"><dict><key>PayloadType</key><string>Configuration</string><key>PayloadVersion</key><integer>1</integer><key>PayloadIdentifier</key><string>t.mix</string><key>PayloadUUID</key><string>M</string><key>PayloadContent</key><array>` +
+		`<dict><key>PayloadType</key><string>com.apple.security.root</string><key>PayloadVersion</key><integer>1</integer><key>PayloadIdentifier</key><string>t.mix.root</string><key>PayloadUUID</key><string>ROOT-1</string><key>PayloadContent</key><data>AQID</data></dict>` +
+		`<dict><key>PayloadType</key><string>com.apple.security.scep</string><key>PayloadVersion</key><integer>1</integer><key>PayloadIdentifier</key><string>t.mix.scep</string><key>PayloadUUID</key><string>SCEP-1</string><key>PayloadContent</key><dict><key>URL</key><string>https://scep.example.com/</string><key>Keysize</key><integer>2048</integer></dict></dict>` +
+		`<dict><key>PayloadType</key><string>com.apple.caldav.account</string><key>PayloadVersion</key><integer>1</integer><key>PayloadIdentifier</key><string>t.mix.cal</string><key>PayloadUUID</key><string>CAL-1</string><key>CalDAVHostName</key><string>cal.example.com</string><key>CalDAVUsername</key><string>kim</string><key>CalDAVPassword</key><string>pw1</string></dict></array></dict></plist>`
+	mixBody, _ := json.Marshal(map[string]any{"profile": []byte(mixed), "blueprint": "pw", "apply": true})
+	if code, b := api("POST", "/v1/ddm/translate", string(mixBody)); code != 200 || !strings.Contains(b, `"saved"`) || !strings.Contains(b, "cert-root-1") || !strings.Contains(b, "com.apple.asset.credential.scep") ||
+		!strings.Contains(b, "com.apple.asset.credential.userpassword") || !strings.Contains(b, "com.apple.configuration.account.caldav") {
+		t.Errorf("translate and apply: %d %.600s", code, b)
+	}
+	if code, b := api("GET", "/v1/blueprints/pw", ""); code != 200 || !strings.Contains(b, "cert-root-1") {
+		t.Errorf("the items were not saved: %d %.300s", code, b)
+	}
+	// an asset whose data does not fit Apple's credential schema is refused when saved
+	badAsset, _ := json.Marshal(map[string]any{"id": "badasset", "name": "bad", "scope": map[string]any{"all": []any{}}, "items": []map[string]any{{"id": "scep", "kind": "asset", "declaration_type": "com.apple.asset.credential.scep", "asset_data": []byte(`{"Keysize": 512}`), "content_type": "application/json"}}})
+	if code, b := api("POST", "/v1/blueprints", string(badAsset)); code != 422 || !strings.Contains(b, "credential") {
+		t.Errorf("a bad credential document was accepted: %d %.300s", code, b)
+	}
+	// Enrollments move in from another NanoMDM-family server as check-ins, without a certificate (admin only).
+	authMsg := `<?xml version="1.0"?><plist version="1.0"><dict><key>MessageType</key><string>Authenticate</string><key>UDID</key><string>MIGRATED-1</string><key>Topic</key><string>com.apple.mgmt.External.test</string><key>SerialNumber</key><string>C02MIG</string></dict></plist>`
+	tokMsg := `<?xml version="1.0"?><plist version="1.0"><dict><key>MessageType</key><string>TokenUpdate</string><key>UDID</key><string>MIGRATED-1</string><key>Topic</key><string>com.apple.mgmt.External.test</string><key>PushMagic</key><string>MAGIC</string><key>Token</key><data>AQIDBA==</data></dict></plist>`
+	for _, m := range []string{authMsg, tokMsg} {
+		if code, b := api("PUT", "/v1/migration", m); code != 200 {
+			t.Errorf("migration check-in: %d %.200s", code, b)
+		}
+	}
+	if code, b := api("GET", "/v1/enrollments/MIGRATED-1", ""); code != 200 || !strings.Contains(b, "MIGRATED-1") {
+		t.Errorf("the migrated enrollment is missing: %d %.200s", code, b)
+	}
+	// devices from another MDM's export are recorded for the day they enroll
+	if code, b := api("POST", "/v1/devices/import?source=jamf&create_groups=true", "Serial Number,Computer Name,Site\nC02IMP,imp-1,Chicago\n"); code != 415 && code != 422 && code != 400 {
+		// without a CSV content type the body is read as JSON and refused
+		t.Errorf("a CSV without its content type: %d %.200s", code, b)
+	}
+	impReq, _ := http.NewRequest("POST", ts.URL+"/v1/devices/import?source=jamf&create_groups=true&columns=groups:Site", strings.NewReader("Serial Number,Computer Name,Site\nC02IMP,imp-1,chicago\n"))
+	impReq.SetBasicAuth("fleetcore", "apikey")
+	impReq.Header.Set("Content-Type", "text/csv")
+	if r, err := (&http.Client{Transport: &http.Transport{TLSClientConfig: insecure}}).Do(impReq); err != nil {
+		t.Error(err)
+	} else {
+		b, _ := io.ReadAll(r.Body)
+		r.Body.Close()
+		if r.StatusCode != 200 || !strings.Contains(string(b), `"imported":1`) {
+			t.Errorf("import: %d %s", r.StatusCode, b)
+		}
+	}
+	if code, b := api("GET", "/v1/devices/expected", ""); code != 200 || !strings.Contains(b, "C02IMP") {
+		t.Errorf("expected devices: %d %.200s", code, b)
 	}
 	if code, b := api("GET", "/v1/ddm/translate/coverage", ""); code != 200 || !strings.Contains(b, "com.apple.mail.managed") {
 		t.Errorf("translate coverage: %d %.300s", code, b)

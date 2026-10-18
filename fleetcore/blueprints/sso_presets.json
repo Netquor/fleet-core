@@ -16,5 +16,34 @@
     "https://login-us.microsoftonline.com"
    ]
   }
+ },
+ "okta": {
+  "title": "Okta (Okta Verify single sign-on extension)",
+  "note": "Platform SSO with Okta Verify needs macOS 14 or later. Set domain to your Okta org's host name (for example example.okta.com). Okta's registration settings (client id, user name, protocol version) travel in a managed app configuration for Okta Verify, not here; check Okta's current guide for your org's URLs.",
+  "parameters": [
+   "domain"
+  ],
+  "payload": {
+   "ExtensionIdentifier": "com.okta.mobile.auth-service-extension",
+   "TeamIdentifier": "B7F62B65BN",
+   "Type": "Redirect",
+   "URLs": [
+    "https://{{domain}}/device-access/api/v1/nonce",
+    "https://{{domain}}/oauth2/v1/token",
+    "https://{{domain}}/v1/auth/device-sign"
+   ]
+  }
+ },
+ "pingid": {
+  "title": "PingID Desktop (macOS single sign-on extension)",
+  "note": "Needs PingID Desktop 2.0 or later and PingFederate 13.1 or later as the identity provider. Confirm the URLs against PingID's current documentation for your environment.",
+  "payload": {
+   "ExtensionIdentifier": "com.pingidentity.pingid.desktop.ssoe",
+   "TeamIdentifier": "6U3RF4C84N",
+   "Type": "Redirect",
+   "URLs": [
+    "https://apps.pingone.com/pingid/desktop"
+   ]
+  }
  }
 }

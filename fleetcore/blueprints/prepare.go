@@ -1,6 +1,7 @@
 package blueprints
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"sort"
@@ -95,6 +96,9 @@ func (b *Blueprint) Prepare() error {
 				if it.ContentType == "" {
 					return fmt.Errorf("item %s: content_type is required with asset_data", it.ID)
 				}
+				if err := checkAssetData(it.DeclarationType, it.ContentType, it.AssetData); err != nil {
+					return fmt.Errorf("item %s: %w", it.ID, err)
+				}
 			} else if ps := commands.Check(def.Keys, it.Declaration, ""); len(ps) > 0 {
 				return fmt.Errorf("item %s: %s", it.ID, ps[0].Error())
 			}
@@ -185,6 +189,33 @@ func (b *Blueprint) Prepare() error {
 			return fmt.Errorf("rings: two rings end at %d percent", r.Percent)
 		}
 		last = r.Percent
+	}
+	return nil
+}
+
+// checkAssetData checks the bytes behind an asset against what Apple says that asset type holds: a certificate is PEM or DER with that media type, and a credential
+// asset (SCEP, ACME, identity, user name and password) is a JSON document with the keys of its credential schema.
+func checkAssetData(assetType, contentType string, data []byte) error {
+	if assetType == "com.apple.asset.credential.certificate" {
+		if contentType != "application/pem" && contentType != "application/pkcs1" {
+			return fmt.Errorf("a certificate asset is application/pem or application/pkcs1, not %s", contentType)
+		}
+		return nil
+	}
+	credType := strings.Replace(assetType, "com.apple.asset.credential.", "com.apple.credential.", 1)
+	cred, ok := schemas.Current().Credential(credType)
+	if !ok || credType == assetType {
+		return nil
+	}
+	if contentType != "application/json" {
+		return fmt.Errorf("a %s asset is a JSON document (application/json), not %s", assetType, contentType)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return fmt.Errorf("the asset data is not a JSON object: %w", err)
+	}
+	if ps := commands.Check(cred.Keys, doc, ""); len(ps) > 0 {
+		return fmt.Errorf("the asset data does not fit %s: %s", credType, ps[0].Error())
 	}
 	return nil
 }

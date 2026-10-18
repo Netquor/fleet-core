@@ -63,6 +63,7 @@ func NewStore(ctx context.Context, db *mongo.Database, tenant string) (*Store, e
 			{Keys: lead(bson.D{{Key: "serial", Value: 1}})},
 		},
 		cDEP:        {{Keys: lead(bson.D{{Key: "serial", Value: 1}})}},
+		cExpected:   {{Keys: lead(bson.D{{Key: "serial", Value: 1}})}},
 		cGroups:     {{Keys: lead(bson.D{{Key: "name", Value: 1}}), Options: options.Index().SetUnique(true)}},
 		cBlueprints: {{Keys: lead(bson.D{{Key: "name", Value: 1}}), Options: options.Index().SetUnique(true)}},
 		cRevisions:  {{Keys: lead(bson.D{{Key: "blueprint", Value: 1}, {Key: "revision", Value: -1}}), Options: options.Index().SetUnique(true)}},
@@ -142,8 +143,23 @@ func (s *Store) UpsertDevice(ctx context.Context, u DeviceUpdate, now time.Time)
 			}
 		}
 	}
+	onInsert := bson.D{{Key: "enrolled_at", Value: now}}
+	// What an administrator imported for this serial number (usually from the MDM the device is leaving) is applied when the device first enrolls here.
+	if u.Serial != "" {
+		if exp, err := s.ExpectedFor(ctx, u.Serial); err == nil && exp != nil {
+			if exp.Name != "" && u.Name == "" {
+				onInsert = append(onInsert, bson.E{Key: "name", Value: exp.Name})
+			}
+			if len(exp.Groups) > 0 {
+				onInsert = append(onInsert, bson.E{Key: "groups", Value: exp.Groups})
+			}
+			if len(exp.Tags) > 0 {
+				onInsert = append(onInsert, bson.E{Key: "tags", Value: exp.Tags})
+			}
+		}
+	}
 	_, err := s.db.Collection(cDevices).UpdateOne(ctx, bson.D{{Key: "_id", Value: s.key(u.ID)}},
-		bson.D{{Key: "$set", Value: s.stamp(set)}, {Key: "$setOnInsert", Value: bson.D{{Key: "enrolled_at", Value: now}}}},
+		bson.D{{Key: "$set", Value: s.stamp(set)}, {Key: "$setOnInsert", Value: onInsert}},
 		options.UpdateOne().SetUpsert(true))
 	return err
 }

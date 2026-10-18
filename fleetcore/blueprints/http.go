@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/micromdm/nanomdm/fleetcore/applicability"
 	"github.com/micromdm/nanomdm/fleetcore/ddm"
@@ -58,6 +59,75 @@ func (a *API) Handler() http.Handler {
 	st := e.Store
 	mux := http.NewServeMux()
 
+	// ---- importing devices from another MDM or an inventory sheet ----
+	// POST /devices/import takes JSON {"devices":[{serial,name,user,groups,tags}], "create_groups":true} or a CSV (Content-Type text/csv) with a header row, where columns= maps
+	// fields to headers (columns=serial:Serial Number,name:Computer Name) and source= labels the records. It records what to do for each serial number when the device enrolls here
+	// (name, static groups, tags), and does it now for devices that already have.
+	mux.HandleFunc("POST /devices/import", func(w http.ResponseWriter, r *http.Request) {
+		var rows []Expected
+		createGroups := r.URL.Query().Get("create_groups") == "true"
+		source := r.URL.Query().Get("source")
+		if strings.HasPrefix(r.Header.Get("Content-Type"), "text/csv") {
+			cols := map[string]string{}
+			for _, pair := range strings.Split(r.URL.Query().Get("columns"), ",") {
+				if k, v, ok := strings.Cut(pair, ":"); ok {
+					cols[strings.TrimSpace(k)] = strings.TrimSpace(v)
+				}
+			}
+			var err error
+			if rows, err = ParseCSV(http.MaxBytesReader(w, r.Body, 32<<20), cols, source); err != nil {
+				fail(w, 422, err.Error())
+				return
+			}
+		} else {
+			var req struct {
+				Devices      []Expected `json:"devices"`
+				CreateGroups bool       `json:"create_groups"`
+				Source       string     `json:"source"`
+			}
+			if !decode(w, r, &req) {
+				return
+			}
+			rows, createGroups = req.Devices, createGroups || req.CreateGroups
+			for i := range rows {
+				if rows[i].Source == "" {
+					rows[i].Source = req.Source
+				}
+			}
+		}
+		if len(rows) == 0 {
+			fail(w, 422, "there are no devices in the import")
+			return
+		}
+		res, err := st.Import(r.Context(), rows, createGroups)
+		if err != nil {
+			fail(w, 500, err.Error())
+			return
+		}
+		e.Invalidate()
+		writeJSON(w, 200, res)
+	})
+	mux.HandleFunc("GET /devices/expected", func(w http.ResponseWriter, r *http.Request) {
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		list, err := st.ListExpected(r.Context(), r.URL.Query().Get("after"), limit)
+		if err != nil {
+			fail(w, 500, err.Error())
+			return
+		}
+		next := ""
+		if len(list) > 0 {
+			next = list[len(list)-1].Serial
+		}
+		writeJSON(w, 200, map[string]any{"devices": list, "next": next})
+	})
+	mux.HandleFunc("DELETE /devices/expected/{serial}", func(w http.ResponseWriter, r *http.Request) {
+		if err := st.DeleteExpected(r.Context(), r.PathValue("serial")); err != nil {
+			fail(w, 500, err.Error())
+			return
+		}
+		w.WriteHeader(204)
+	})
+
 	// ---- blueprints ----
 	mux.HandleFunc("GET /blueprints", func(w http.ResponseWriter, r *http.Request) {
 		bps, err := st.ListBlueprints(r.Context(), false)
@@ -72,6 +142,46 @@ func (a *API) Handler() http.Handler {
 		}
 		writeJSON(w, 200, map[string]any{"blueprints": bps})
 	})
+	// persist checks and stores a blueprint, answering the request; save and the translator's apply both end here.
+	persist := func(r *http.Request, b Blueprint, create bool) (int, any) {
+		if a.ResolveApp != nil {
+			for i := range b.Items {
+				if it := &b.Items[i]; it.Kind == "app" && it.AdamID != "" && it.BundleID == "" {
+					bundle, err := a.ResolveApp(r.Context(), it.AdamID)
+					if err != nil {
+						return 422, map[string]string{"error": "item " + it.ID + ": " + err.Error()}
+					}
+					it.BundleID = bundle
+				}
+			}
+		}
+		if err := b.Prepare(); err != nil {
+			return 422, map[string]string{"error": err.Error()}
+		}
+		env, err := e.Env(r.Context())
+		if err != nil {
+			return 500, map[string]string{"error": err.Error()}
+		}
+		if _, err := b.Scope.Expand(env); err != nil {
+			return 422, map[string]string{"error": "scope: " + err.Error()}
+		}
+		if create {
+			if _, err := st.GetBlueprint(r.Context(), b.ID); err == nil {
+				return 409, map[string]string{"error": "a blueprint with that id exists; PUT replaces it"}
+			}
+		}
+		by, _, _ := r.BasicAuth()
+		out, err := st.SaveBlueprint(r.Context(), b, by, env)
+		if err != nil {
+			return 500, map[string]string{"error": err.Error()}
+		}
+		e.Invalidate()
+		code := 200
+		if create {
+			code = 201
+		}
+		return code, out
+	}
 	save := func(w http.ResponseWriter, r *http.Request, id string, create bool) {
 		var b Blueprint
 		if !decode(w, r, &b) {
@@ -80,49 +190,8 @@ func (a *API) Handler() http.Handler {
 		if id != "" {
 			b.ID = id
 		}
-		if a.ResolveApp != nil {
-			for i := range b.Items {
-				if it := &b.Items[i]; it.Kind == "app" && it.AdamID != "" && it.BundleID == "" {
-					bundle, err := a.ResolveApp(r.Context(), it.AdamID)
-					if err != nil {
-						fail(w, 422, "item "+it.ID+": "+err.Error())
-						return
-					}
-					it.BundleID = bundle
-				}
-			}
-		}
-		if err := b.Prepare(); err != nil {
-			fail(w, 422, err.Error())
-			return
-		}
-		env, err := e.Env(r.Context())
-		if err != nil {
-			fail(w, 500, err.Error())
-			return
-		}
-		if _, err := b.Scope.Expand(env); err != nil {
-			fail(w, 422, "scope: "+err.Error())
-			return
-		}
-		if create {
-			if _, err := st.GetBlueprint(r.Context(), b.ID); err == nil {
-				fail(w, 409, "a blueprint with that id exists; PUT replaces it")
-				return
-			}
-		}
-		by, _, _ := r.BasicAuth()
-		out, err := st.SaveBlueprint(r.Context(), b, by, env)
-		if err != nil {
-			fail(w, 500, err.Error())
-			return
-		}
-		e.Invalidate()
-		code := 200
-		if create {
-			code = 201
-		}
-		writeJSON(w, code, out)
+		code, body := persist(r, b, create)
+		writeJSON(w, code, body)
 	}
 	mux.HandleFunc("POST /blueprints", func(w http.ResponseWriter, r *http.Request) { save(w, r, "", true) })
 	mux.HandleFunc("PUT /blueprints/{id}", func(w http.ResponseWriter, r *http.Request) { save(w, r, r.PathValue("id"), false) })
@@ -545,6 +614,10 @@ func (a *API) Handler() http.Handler {
 		var req struct {
 			Profile     []byte `json:"profile"`
 			Declaration string `json:"declaration"`
+			// Blueprint names an existing blueprint to add the translated items to; nothing is saved unless Apply is true, and the items are returned either way.
+			Blueprint string `json:"blueprint"`
+			Apply     bool   `json:"apply"`
+			IDPrefix  string `json:"id_prefix"`
 		}
 		if !decode(w, r, &req) {
 			return
@@ -562,8 +635,10 @@ func (a *API) Handler() http.Handler {
 			Note string `json:"note,omitempty"`
 		}
 		var out []outRow
+		var rows []TranslationRow
 		for _, c := range p.PayloadContent {
 			typ, _ := c["PayloadType"].(string)
+			display, _ := c["PayloadDisplayName"].(string)
 			var trs []*ddm.Translation
 			var ok bool
 			if req.Declaration != "" {
@@ -580,9 +655,34 @@ func (a *API) Handler() http.Handler {
 			}
 			for _, tr := range trs {
 				out = append(out, outRow{PayloadType: typ, Translation: tr})
+				rows = append(rows, TranslationRow{Name: display, PayloadType: typ, Translation: tr})
 			}
 		}
-		writeJSON(w, 200, map[string]any{"payloads": out})
+		items, err := TranslationItems(rows, req.IDPrefix)
+		if err != nil {
+			fail(w, 422, err.Error())
+			return
+		}
+		resp := map[string]any{"payloads": out, "items": items}
+		if req.Apply {
+			if req.Blueprint == "" {
+				fail(w, 400, "apply needs the blueprint to add the items to")
+				return
+			}
+			b, err := st.GetBlueprint(r.Context(), req.Blueprint)
+			if err != nil {
+				fail(w, 404, "no such blueprint")
+				return
+			}
+			mergeItems(b, items)
+			code, body := persist(r, *b, false)
+			if code >= 300 {
+				writeJSON(w, code, body)
+				return
+			}
+			resp["saved"] = body
+		}
+		writeJSON(w, 200, resp)
 	})
 	// How much of each profile payload the translator covers, by the pinned schemas and the alias table: what to look at after a schema update.
 	mux.HandleFunc("GET /ddm/translate/coverage", func(w http.ResponseWriter, r *http.Request) {

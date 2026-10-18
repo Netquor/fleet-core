@@ -6,11 +6,14 @@ import (
 	"encoding/base64"
 	"flag"
 	"fmt"
+	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/micromdm/nanomdm/fleetcore/provision"
 	"github.com/micromdm/nanomdm/fleetcore/seal"
+	"github.com/micromdm/nanomdm/fleetcore/userauth"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
@@ -27,6 +30,20 @@ func adminCommand(args []string) bool {
 			fatalf("%v", err)
 		}
 		fmt.Println(base64.StdEncoding.EncodeToString(b))
+	case "ua-hash":
+		fs := flag.NewFlagSet("ua-hash", flag.ExitOnError)
+		user := fs.String("user", "", "the person's short name")
+		realm := fs.String("realm", "", "the realm (-ua-realm)")
+		fs.Usage = func() {
+			fmt.Fprintln(os.Stderr, "Usage: fleetcore ua-hash -user NAME -realm REALM\n\nReads the password from standard input and prints a user:realm:ha1 line for the -ua-users file. The password is not stored.")
+		}
+		_ = fs.Parse(args[1:])
+		if *user == "" || *realm == "" {
+			fs.Usage()
+			os.Exit(2)
+		}
+		pw, _ := io.ReadAll(os.Stdin)
+		fmt.Printf("%s:%s:%s\n", *user, *realm, userauth.HA1(*user, *realm, strings.TrimRight(string(pw), "\r\n")))
 	case "tenant-key":
 		fs := flag.NewFlagSet("tenant-key", flag.ExitOnError)
 		tenant := fs.String("tenant", "", "the tenant id")

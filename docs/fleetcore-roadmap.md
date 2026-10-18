@@ -150,8 +150,8 @@ In the current schema, the MDM software-update commands (`ScheduleOSUpdate`, `Av
 
 Everything in the earlier plan is built. What is left, honestly:
 
-1. **Real devices**: the protocol, ADE, BYOD, attestation, VPP and Platform SSO are tested against Apple's schemas, documented behavior and fakes (including a synthetic attestation chain). None has run against a real device, Business Manager or the App Store yet.
-2. **Event relay**: one change stream (or outbox) from the cluster to a message bus, for products that want events.
-3. **Translator**: always-on VPN, TCC privacy, and more restriction settings as Apple adds declarations (the coverage report lists what to look at).
-4. **UserAuthenticate** beyond the minimal digest round; **Platform SSO** presets for vendors other than Microsoft Entra.
-5. **Migration tooling** from other MDMs (device records, enrollments).
+1. **Real devices**: the protocol, ADE, BYOD, attestation, VPP, Platform SSO, UserAuthenticate and the translator's output are tested against Apple's schemas, documented behavior and fakes (including a synthetic attestation chain). None has run against a real device, Business Manager, an Open Directory or the App Store yet. UserAuthenticate in particular: Apple does not publish the HTTP method and URI of the digest, so the check accepts several.
+2. **Translator**: always-on VPN, TCC privacy (the schemas do not describe the mapping), and the restrictions Apple has not given a declaration yet (the coverage report lists them). Content types and the shared-secret credential form are chosen from Apple's schemas and unverified on a device.
+3. **Migration**: in-place migration works from NanoMDM-family servers. Other MDMs cannot move enrollments (they belong to the old push certificate and identity); their device lists import, but there is no reader for any product's API, only CSV and JSON.
+4. **Platform SSO presets** for vendors other than Entra, Okta and PingID (Jamf Connect's identifiers were not found in a source to trust).
+5. **Event relay**: no event for every change; add types in `fleetcore/relay` as consumers need them.

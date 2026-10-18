@@ -32,6 +32,12 @@ type alias struct {
 	Ref bool `json:"ref,omitempty"`
 	// Decl limits the alias to the declaration types listed, comma separated (a payload that several declarations replace).
 	Decl string `json:"decl,omitempty"`
+	// CredGroup gathers keys that make up one credential (a user name and a password) into a user name and password credential asset; CredRole says which part this key
+	// is (user, password, secret for a bare secret, or same-as:<group> for a flag meaning "the password of that group"), and CredRef is where in the declaration the asset is
+	// referred to. The same group name on several keys is one asset.
+	CredGroup string `json:"cred_group,omitempty"`
+	CredRole  string `json:"cred_role,omitempty"`
+	CredRef   string `json:"cred_ref,omitempty"`
 	// Ignore marks a key that only selects how the payload is translated and has nothing to carry over.
 	Ignore bool `json:"ignore,omitempty"`
 }
@@ -116,10 +122,116 @@ func resolve(keys []schemas.Key, path string) (schemas.Key, bool) {
 	return k, true
 }
 
+type credGroup struct {
+	user, password string
+	hasUser, hasPW bool
+	secret         bool
+	sameAs         string
+	ref            string
+	sameFlag       bool
+}
+
 type translator struct {
+	creds   map[string]*credGroup
+	payload map[string]any
 	aliases map[string]alias
 	tr      *Translation
 	claimed map[string]bool // top-level profile keys the declaration has a setting for
+}
+
+func text(v any) string {
+	switch x := v.(type) {
+	case string:
+		return x
+	case []byte:
+		return string(x)
+	}
+	return fmt.Sprint(v)
+}
+
+// gather collects one part of a credential for finishCredentials.
+func (t *translator) gather(a alias, val any) {
+	g := t.creds[a.CredGroup]
+	if g == nil {
+		g = &credGroup{}
+		t.creds[a.CredGroup] = g
+	}
+	if a.CredRef != "" {
+		g.ref = a.CredRef
+	}
+	switch {
+	case a.CredRole == "user":
+		g.user, g.hasUser = text(val), true
+	case a.CredRole == "password":
+		g.password, g.hasPW = text(val), true
+	case a.CredRole == "secret":
+		g.password, g.hasPW, g.secret = text(val), true, true
+	case strings.HasPrefix(a.CredRole, "same-as:"):
+		if b, ok := val.(bool); ok && b {
+			g.sameAs = strings.TrimPrefix(a.CredRole, "same-as:")
+		}
+	}
+}
+
+// finishCredentials turns each gathered credential into a user name and password asset and points the declaration at it. Only a value that was given is stored; a credential
+// whose reference the declaration has no place for is reported instead of dropped.
+func (t *translator) finishCredentials(payloadType string, def *schemas.Declaration, set *schemas.Set) {
+	cred, haveSchema := set.Credential("com.apple.credential.usernameandpassword")
+	names := make([]string, 0, len(t.creds))
+	for n := range t.creds {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		g := t.creds[n]
+		if g.sameAs != "" && !g.hasPW {
+			if o := t.creds[g.sameAs]; o != nil {
+				g.password, g.hasPW = o.password, o.hasPW
+			}
+		}
+		if !g.hasUser && !g.hasPW {
+			continue
+		}
+		if !haveSchema || g.ref == "" {
+			t.unmapped(n, "credentials are delivered as an asset, which this payload has no place to refer to")
+			continue
+		}
+		if _, ok := resolve(def.Keys, g.ref); !ok {
+			continue // the declaration this payload is being translated to has no such setting; another kind of declaration may
+		}
+		doc := map[string]any{"UserName": g.user}
+		if g.hasPW {
+			doc["Password"] = g.password
+		}
+		if why := checkDoc(t, doc, cred.Keys); why != "" {
+			t.unmapped(n, why)
+			continue
+		}
+		body, _ := json.Marshal(doc)
+		sum := sha256.Sum256([]byte(payloadType + "\x00" + n + "\x00" + string(body)))
+		id := "cred-" + strings.ToLower(n) + "-" + hex.EncodeToString(sum[:4])
+		t.tr.Assets = append(t.tr.Assets, Asset{ID: id, DeclarationType: "com.apple.asset.credential.userpassword", ContentType: "application/json", Data: body})
+		setPath(t.tr.Payload, g.ref, "$asset:"+id)
+		if g.secret {
+			t.tr.Approximate[n] = "a shared secret is stored as the password of a user name and password credential with an empty user name; confirm on a device"
+		}
+	}
+}
+
+// checkDoc validates a credential document against its schema and returns why it does not fit.
+func checkDoc(t *translator, doc map[string]any, keys []schemas.Key) string {
+	probe := &translator{aliases: map[string]alias{}, tr: &Translation{Payload: map[string]any{}, Approximate: map[string]string{}}, claimed: map[string]bool{}, creds: map[string]*credGroup{}}
+	out := map[string]any{}
+	probe.object(doc, keys, "", out)
+	if len(probe.tr.Untranslated) > 0 {
+		return probe.tr.Reasons[probe.tr.Untranslated[0]] + " (" + probe.tr.Untranslated[0] + ")"
+	}
+	for _, k := range keys {
+		if _, ok := out[k.Key]; k.Required && !ok {
+			return k.Key + " is required"
+		}
+	}
+	return ""
 }
 
 func (t *translator) unmapped(path, why string) {
@@ -162,6 +274,13 @@ func (t *translator) object(in map[string]any, defs []schemas.Key, prefix string
 		a, hasAlias := t.aliases[path]
 		if hasAlias && a.Decl != "" && !declIn(a.Decl, t.tr.Declaration) {
 			hasAlias = false
+		}
+		if hasAlias && a.CredGroup != "" {
+			if top {
+				t.claimed[key] = true
+			}
+			t.gather(a, val)
+			continue
 		}
 		if hasAlias && a.Ignore {
 			t.claimed[key] = true
@@ -422,7 +541,7 @@ func bytesOf(v any) ([]byte, bool) {
 }
 
 // certificate turns a certificate payload into an asset (the bytes) and the configuration that refers to it.
-func (t *translator) certificate(payload map[string]any, assetType string, def *schemas.Declaration) {
+func (t *translator) certificate(payload map[string]any, assetType string, def *schemas.Declaration, set *schemas.Set) {
 	data, ok := bytesOf(payload["PayloadContent"])
 	if !ok {
 		t.unmapped("PayloadContent", "the payload has no certificate data")
@@ -434,20 +553,29 @@ func (t *translator) certificate(payload map[string]any, assetType string, def *
 		sum := sha256.Sum256(data)
 		id = "cert-" + hex.EncodeToString(sum[:4])
 	}
-	content := "application/pkix-cert"
+	content := "application/pkcs1"
 	switch {
 	case assetType == "com.apple.asset.credential.identity":
-		content = "application/x-pkcs12"
-		if pw, _ := payload["Password"].(string); pw != "" {
-			t.unmapped("Password", "an identity asset has no password field: export the identity without a password, or keep this one in a profile")
+		// An identity asset is a JSON document holding the PKCS #12 data and its password.
+		pw, _ := payload["Password"].(string)
+		doc := map[string]any{"Password": pw, "Identity": data}
+		cred, ok := set.Credential("com.apple.credential.identity")
+		if !ok {
+			t.unmapped("PayloadContent", "the pinned schemas do not describe com.apple.credential.identity")
 			return
 		}
+		if why := checkDoc(t, map[string]any{"Password": pw, "Identity": data}, cred.Keys); why != "" {
+			t.unmapped("PayloadContent", why)
+			return
+		}
+		body, _ := json.Marshal(doc) // data becomes base64
+		data, content = body, "application/json"
+		t.claimed["Password"] = true
 	case bytes.HasPrefix(bytes.TrimSpace(data), []byte("-----BEGIN")):
-		content = "application/x-pem-file"
+		content = "application/pem"
 	}
 	t.tr.Assets = append(t.tr.Assets, Asset{ID: id, DeclarationType: assetType, ContentType: content, Data: data})
 	t.tr.Payload["CredentialAssetReference"] = "$asset:" + id
-	t.tr.Approximate["PayloadContent"] = "the certificate moved to the asset " + id + " (content type " + content + ", chosen from the data; confirm on a device)"
 	t.claimed["PayloadContent"] = true
 	if k, ok := findKey(def.Keys, "KeyIsExtractable"); ok {
 		if v, ok := payload[k.Key].(bool); ok {
@@ -510,6 +638,7 @@ func translateOne(payloadType string, payload map[string]any, declType string, s
 		return nil, nil, false
 	}
 	t := &translator{
+		creds:   map[string]*credGroup{},
 		aliases: aliasTable()[payloadType],
 		tr:      &Translation{Declaration: declType, Payload: map[string]any{}, Approximate: map[string]string{}},
 		claimed: map[string]bool{},
@@ -518,11 +647,12 @@ func translateOne(payloadType string, payload map[string]any, declType string, s
 		t.claimed["FilterType"] = true
 		t.unmapped("FilterType", "only plug-in content filters have a declaration; the built-in filter stays a profile")
 	} else if kind, ok := certificateKinds[payloadType]; ok {
-		t.certificate(payload, kind, def)
+		t.certificate(payload, kind, def, set)
 	} else if ct, ok := credentialKinds[payloadType]; ok {
 		t.credential(payload, ct, set)
 	} else {
 		t.object(payload, def.Keys, "", t.tr.Payload)
+		t.finishCredentials(payloadType, def, set)
 	}
 	t.finish()
 	return t.tr, t.claimed, true

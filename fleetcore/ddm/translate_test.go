@@ -32,11 +32,12 @@ func TestTranslateNestedAndValues(t *testing.T) {
 	if sg, _ := sm["Signing"].(map[string]any); sg["Enabled"] != true {
 		t.Errorf("smime %v", sm)
 	}
-	if !strings.Contains(tr.Reasons["IncomingPassword"], "asset") || tr.Reasons["PreventMove"] == "" {
+	if tr.Reasons["PreventMove"] == "" {
 		t.Errorf("reasons %v", tr.Reasons)
 	}
-	if _, leaked := tr.Payload["IncomingPassword"]; leaked {
-		t.Error("a password was copied into a declaration")
+	if strings.Contains(fmt.Sprint(tr.Payload), "\"x\"") || len(tr.Assets) != 1 || tr.Assets[0].DeclarationType != "com.apple.asset.credential.userpassword" ||
+		!strings.Contains(string(tr.Assets[0].Data), `"Password":"x"`) || in["AuthenticationCredentialsAssetReference"] != "$asset:"+tr.Assets[0].ID {
+		t.Errorf("the password is not in a credential asset the declaration refers to: %v %+v", in, tr.Assets)
 	}
 }
 
@@ -139,8 +140,22 @@ func TestAliasesFollowTheSchemas(t *testing.T) {
 				t.Errorf("%s: profile key %s is not in the schema", pt, from)
 			}
 			if a.To == "" {
-				if a.Note == "" && !a.Ignore && !a.Lift {
+				if a.Note == "" && !a.Ignore && !a.Lift && a.CredGroup == "" {
 					t.Errorf("%s: %s has no counterpart and no reason", pt, from)
+				}
+				continue
+			}
+			if a.CredRef != "" {
+				ok := false
+				for _, dt := range equiv {
+					if d, _ := set.Declaration(dt); d != nil {
+						if _, has := resolve(d.Keys, a.CredRef); has {
+							ok = true
+						}
+					}
+				}
+				if !ok {
+					t.Errorf("%s: %s refers to %s, which no equivalent declaration has", pt, from, a.CredRef)
 				}
 				continue
 			}
@@ -209,20 +224,21 @@ func TestTranslateCertificateToAsset(t *testing.T) {
 		t.Fatalf("%+v", tr)
 	}
 	a := tr.Assets[0]
-	if a.ID != "cert-aaaa-1" || a.DeclarationType != "com.apple.asset.credential.certificate" || a.ContentType != "application/x-pem-file" || string(a.Data) != string(pemData) {
+	if a.ID != "cert-aaaa-1" || a.DeclarationType != "com.apple.asset.credential.certificate" || a.ContentType != "application/pem" || string(a.Data) != string(pemData) {
 		t.Errorf("asset %+v", a)
 	}
 	if tr.Payload["CredentialAssetReference"] != "$asset:cert-aaaa-1" || tr.Declaration != "com.apple.configuration.security.certificate" {
 		t.Errorf("payload %v", tr.Payload)
 	}
-	// an identity with a password cannot move: the asset has nowhere to put it
+	// an identity is a JSON document holding the PKCS #12 data and its password
 	tr, _ = Translate("com.apple.security.pkcs12", map[string]any{"PayloadUUID": "B", "PayloadContent": []byte{1, 2, 3}, "Password": "secret"}, "", set)
-	if len(tr.Assets) != 0 || tr.Reasons["Password"] == "" || strings.Contains(fmt.Sprint(tr), "secret") {
-		t.Errorf("password: %+v", tr)
+	if len(tr.Assets) != 1 || tr.Assets[0].DeclarationType != "com.apple.asset.credential.identity" || tr.Assets[0].ContentType != "application/json" {
+		t.Fatalf("identity: %+v", tr)
 	}
-	tr, _ = Translate("com.apple.security.pkcs12", map[string]any{"PayloadUUID": "B", "PayloadContent": []byte{1, 2, 3}}, "", set)
-	if len(tr.Assets) != 1 || tr.Assets[0].DeclarationType != "com.apple.asset.credential.identity" || tr.Assets[0].ContentType != "application/x-pkcs12" {
-		t.Errorf("identity: %+v", tr)
+	var doc map[string]any
+	_ = json.Unmarshal(tr.Assets[0].Data, &doc)
+	if doc["Password"] != "secret" || doc["Identity"] != "AQID" || strings.Contains(fmt.Sprint(tr.Payload), "secret") {
+		t.Errorf("identity doc %v payload %v", doc, tr.Payload)
 	}
 }
 
@@ -253,8 +269,9 @@ func TestTranslateIKEv2VPN(t *testing.T) {
 		nr["IncludeAllNetworks"] != true || idle["DeadPeerDetectionRate"] != "Medium" || ike["EncryptionAlgorithm"] != "AES-256-GCM" {
 		t.Errorf("payload %v", p)
 	}
-	if strings.Contains(fmt.Sprint(p), "s3cret") || trs[0].Reasons["IKEv2.SharedSecret"] == "" {
-		t.Errorf("secret handling: %v %v", p, trs[0].Reasons)
+	if strings.Contains(fmt.Sprint(p), "s3cret") || len(trs[0].Assets) != 1 || !strings.Contains(string(trs[0].Assets[0].Data), "s3cret") ||
+		au["CredentialsAssetReference"] != "$asset:"+trs[0].Assets[0].ID || trs[0].Approximate["psk"] == "" {
+		t.Errorf("secret handling: %v %+v", p, trs[0].Assets)
 	}
 	child, _ := p["ChildSecurityAssociationParameters"].(map[string]any)
 	if child["EncryptionAlgorithm"] != nil {
@@ -333,8 +350,8 @@ func TestTranslateIPSecAndPluginVPN(t *testing.T) {
 	if trs[0].Payload["HostName"] != "ipsec.example.com" || au["Method"] != "SharedSecret" || au["LocalIdentifier"] != "grp" || xa["Enabled"] != true {
 		t.Errorf("payload %v", trs[0].Payload)
 	}
-	if trs[0].Reasons["IPSec.SharedSecret"] == "" || strings.Contains(fmt.Sprint(trs[0].Payload), "SharedSecret\":") {
-		t.Errorf("secrets: %v", trs[0].Reasons)
+	if len(trs[0].Assets) != 2 || strings.Contains(fmt.Sprint(trs[0].Payload), "xx") {
+		t.Errorf("credential assets: %+v", trs[0].Assets)
 	}
 	trs, _ = TranslateAll("com.apple.vpn.managed", map[string]any{
 		"VPNType": "VPN", "VPNSubType": "com.vendor.vpn", "UserDefinedName": "Vendor",

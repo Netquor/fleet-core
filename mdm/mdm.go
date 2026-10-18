@@ -16,6 +16,8 @@ type Enrollment struct {
 	UserLongName     string `plist:",omitempty"`
 	EnrollmentID     string `plist:",omitempty"`
 	EnrollmentUserID string `plist:",omitempty"`
+	// AuthToken is the token a network or mobile user was given by UserAuthenticate; the device sends it on that user's requests.
+	AuthToken string `plist:",omitempty"`
 }
 
 // EnrollID contains the custom enrollment IDs derived from enrollment

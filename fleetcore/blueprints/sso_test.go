@@ -142,3 +142,21 @@ func TestSSODeclarationFollowsTheSchema(t *testing.T) {
 		}
 	}
 }
+
+func TestMoreSSOPresets(t *testing.T) {
+	p, err := SSOPayload(Item{Kind: "platform_sso", Preset: "okta", Parameters: map[string]string{"domain": "example.okta.com"}, SSO: map[string]any{"PlatformSSO": map[string]any{"AuthenticationMethod": "UserSecureEnclaveKey"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	urls, _ := p["URLs"].([]any)
+	if p["ExtensionIdentifier"] != "com.okta.mobile.auth-service-extension" || p["TeamIdentifier"] != "B7F62B65BN" || len(urls) != 3 || urls[0] != "https://example.okta.com/device-access/api/v1/nonce" {
+		t.Errorf("okta %v", p)
+	}
+	if _, err := SSOPayload(Item{Kind: "platform_sso", Preset: "okta"}); err == nil {
+		t.Error("the okta preset was accepted without its domain")
+	}
+	p, err = SSOPayload(Item{Kind: "platform_sso", Preset: "pingid"})
+	if err != nil || p["ExtensionIdentifier"] != "com.pingidentity.pingid.desktop.ssoe" {
+		t.Errorf("pingid %v %v", p, err)
+	}
+}

@@ -65,6 +65,34 @@ A profile is written once and scoped to a mixed fleet. Before it is sent, the en
 - **Schemas**: `schemas.Refresher` checks Apple's `release` branch daily, downloads and parses it, refuses a snapshot that lost most definitions, saves it in MongoDB, and switches to it without a restart. Validation, the command API and applicability all read the current set. `go run ./tools/genschemas` refreshes the copy built into the binary. `POST /v1/schemas/refresh` forces a check.
 - **OS releases**: Apple's public releases feed is read hourly; betas and release candidates are ignored; the newest shipping release is kept per platform and per major version. A new release re-evaluates every device.
 
+### Declarative device management (built)
+
+`fleetcore/ddm` serves Apple's protocol (tokens, declaration-items, declarations, status) from MongoDB for every device, so any server process can answer any device. Declarations are not stored by hand: the blueprint engine computes each device's whole set (the blueprints whose scope matches it, plus the status subscription every device gets), writes only the difference, and sends a `DeclarativeManagement` command (carrying the tokens, so a device that is current skips a round trip) only when the set's token changed. A device leaving a scope loses the declaration and its activation the same way. Status reports bring back whether each declaration is active and valid, which becomes the application state (`applied`, `failed` with Apple's reason), and update the inventory (OS version, model, serial) without polling.
+
+Blueprint item kinds for it:
+
+- **declaration**: any configuration type from Apple's schema (`com.apple.configuration.passcode.settings`, accounts, VPN, certificates...), validated against the schema when the blueprint is saved, with the activation generated for you.
+- **os_update**: software update enforcement (`softwareupdate.enforcement.specific`). The target comes from Apple's GDMF service, which Apple names as the source for enforcement targets: `latest` is the newest release the device's *hardware* is listed for (an iPhone Apple stops at 26 is moved to 26.7.1, not left failing on 27), `latest-in-major` stays in the device's own major version, or a fixed version. The deadline is `deadline_days` (default 7) after the release was published, or after the item last changed if later, at `deadline_hour` local time. Only what GDMF currently offers is ever targeted, as Apple requires; the enforcement is lifted when the device reports the new version.
+- **profile** with `delivery` `auto` (the default): see below.
+
+Who can receive what is read from Apple's schema per declaration type: the platform, the OS version it was introduced in, and the enrollment kinds it allows (supervised, user, device). A device that cannot is not failed; its application is `not_applicable` with the reason. Supervision is learned from the device (`IsSupervised`), because Apple allows many declarations, including software update enforcement on a Mac, only on supervised devices.
+
+### Retiring profiles
+
+What the schemas say (not what is commonly assumed): declarative management is not new in 27. The status channel and legacy-profile declarations start at iOS 15 and macOS 13, and most native configurations at iOS 17 and macOS 14. What 27 adds is deprecation of profile payloads that now have declarations (DNS settings and proxy, relay, passcode policy, the new restrictions payload and content caching), the removal of the software-update commands, and `ProfileAssetReference` for legacy profiles. `InstallProfile` itself is not deprecated. And on macOS, most declaration types allow only supervised, user and local enrollments, so a Mac enrolled by hand (not through Apple Business Manager) cannot take them.
+
+So the plan is a delivery planner, not a switch:
+
+1. A profile item's `delivery` is `auto`: on a device that takes declarative management (platform, OS version and enrollment all allowed for the legacy-profile declaration), the profile, already adapted to the platform, is stored for the device and delivered as a **legacy-profile declaration**; the device downloads it with its device identity from `/ddm/profile/{key}` and the status channel reports it. Every other device keeps the `InstallProfile` command. `profile` forces the command, `declarative` refuses to downgrade and says why.
+2. A profile already installed by command is **removed before** the declaration takes over when a device becomes capable (for example supervised through Business Manager), so the two never fight.
+3. Native declarations (`declaration` items) are the end state. `GET /v1/ddm/coverage` lists each profile in the blueprints with its payload types, the native declaration that replaces each where one exists (`fleetcore/ddm/equivalents.json`, checked against the schema in tests), where Apple deprecated or removed the payload, and how much of the fleet is on each delivery. Translating a profile's keys into the matching declaration is a manual step for now.
+
+Smart groups and scoping are unchanged and are the point of putting this in blueprints: scope is evaluated on the server (indexed rules over device attributes, dynamic and static groups, OS-currency tests), and that decides which declarations are in a device's set. Apple's own on-device activation predicates remain available as a declaration payload for conditions only the device knows (`Predicate`).
+
+### Compared with KMFDDM
+
+[KMFDDM](https://github.com/jessepeterson/kmfddm) (Jesse Peterson, an experimental companion to NanoMDM on SQL) is a good model of the protocol: server tokens as content hashes, a declarations token composed per enrollment, automatic notification, a stored status channel. fleetcore does the same, with differences that follow from being one product: declarations are not assigned to devices by hand (the README says you maintain which sets go to which enrollment IDs, and that an assignment lasts until removed); the device set is computed from scope rules, so nothing is left behind when a device leaves a group or checks out, and a change notifies only devices whose set actually changed (KMFDDM says it may over-notify); and declarations are validated against Apple's current schema when saved.
+
 ### What the schemas told us about Apple's direction
 
 In the current schema, the MDM software-update commands (`ScheduleOSUpdate`, `AvailableOSUpdates`, `OSUpdateStatus`, `ScheduleOSUpdateScan`) are deprecated in OS 26 and removed in OS 27. Enforcing updates therefore needs **declarative device management** (software update enforcement configurations and the status channel). fleetcore refuses the removed commands for devices on 27 and says so. DDM is the next phase and the next piece of this roadmap.
@@ -80,7 +108,7 @@ In the current schema, the MDM software-update commands (`ScheduleOSUpdate`, `Av
 | Configuration profiles per platform | built (applicability) |
 | Blueprints, groups, staged rollout, drift repair | built |
 | OS currency and update enforcement | feed and out-of-date rules built; enforcement needs DDM |
-| **Declarative device management** (configurations, assets, activations, management properties, status channel) | **next**: the check-in hook exists in NanoMDM; fleetcore needs the declaration store, the manifest and item endpoints, activation logic and status reports |
+| Declarative device management: configurations, activations, status channel, software update enforcement, legacy-profile delivery | built; assets (credentials, data) and management properties are not yet blueprint items |
 | Apps: VPP / Apps and Books licensing, `InstallApplication`, managed app config | planned |
 | User Enrollment and Account-Driven enrollment (Managed Apple Accounts, BYOD) | planned: `GetToken`, UserAuthenticate, the enrollment-type rules in the schemas (`user_enrollment: forbidden`) |
 | Managed Device Attestation (ACME), Platform SSO | planned |
@@ -97,4 +125,4 @@ In the current schema, the MDM software-update commands (`ScheduleOSUpdate`, `Av
 5. **Device and enrollment REST APIs**: list/filter devices, enrollments, queue and results over the native BSON documents, with cursors.
 6. **Hardening**: per-tenant encryption of push key, unlock and bootstrap tokens, and identity keys; per-cell database users; a relay from one cluster-level change stream (or outbox) to NATS for events.
 
-Order: DDM, VPP and apps, user enrollment, device APIs, hardening, blueprints, VPP, device APIs, hardening. ADE and the command API are what make a first real fleet usable.
+Order: DDM assets and native-declaration translators, VPP and apps, user enrollment, device APIs, hardening, blueprints, VPP, device APIs, hardening. ADE and the command API are what make a first real fleet usable.

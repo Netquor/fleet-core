@@ -23,6 +23,7 @@ import (
 	"github.com/micromdm/nanomdm/fleetcore/applicability"
 	"github.com/micromdm/nanomdm/fleetcore/blueprints"
 	"github.com/micromdm/nanomdm/fleetcore/commands"
+	"github.com/micromdm/nanomdm/fleetcore/ddm"
 	"github.com/micromdm/nanomdm/fleetcore/dep"
 	"github.com/micromdm/nanomdm/fleetcore/enroll"
 	"github.com/micromdm/nanomdm/fleetcore/osreleases"
@@ -186,7 +187,13 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 
 	// ---- the MDM service ----
 	logger := cfg.Logger
+	ddmStore, err := ddm.NewStore(ctx, cfg.PKIDB, cfg.PKITenant)
+	if err != nil {
+		return nil, fmt.Errorf("declarative management: %w", err)
+	}
+	ddmSvc := &ddm.Service{Store: ddmStore}
 	nano := nanomdm.New(cfg.Storage,
+		nanomdm.WithDeclarativeManagement(ddmSvc),
 		nanomdm.WithUserAuthenticate(nanomdm.NewUAService(cfg.Storage, false)),
 		nanomdm.WithGetToken(nanomdm.NewTokenMux()),
 		nanomdm.WithLogger(logger.With("service", "nanomdm")))
@@ -219,6 +226,9 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		return nil, err
 	}
 	engine := blueprints.New(bpStore, pushEnqueuer{pe}, profileRules, catalog, logger.With("service", "blueprints"), blueprints.Config{})
+	engine.DDM = ddmStore
+	engine.BaseURL = cfg.BaseURL
+	ddmSvc.OnStatus = engine.OnStatus
 	// A new Apple release or schema changes what is out of date and what applies: look at every device again.
 	relFeed.OnChange = func([]osreleases.Release) {
 		_ = bpStore.Touch(context.Background(), blueprints.Rule{})
@@ -273,6 +283,21 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		mdmAuth.Handle(endpointMDM, httpmdm.CheckinAndCommandHandler(mdmService, logger.With("handler", "checkin-command")))
 	}
 
+	// Profiles that reach a device as legacy-profile declarations are downloaded here, with the device's identity like any MDM request.
+	mdmAuth.Handle("/ddm/profile/", httpmdm.CertWithEnrollmentIDMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := ddmStore.Profile(r.Context(), httpmdm.GetEnrollmentID(r.Context()), strings.TrimPrefix(r.URL.Path, "/ddm/profile/"))
+		if err != nil {
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+		if body == nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/x-apple-aspen-config")
+		_, _ = w.Write(body)
+	}), certauth.HashCert, cfg.Storage, true, logger.With("handler", "ddm-profile")))
+
 	// ---- SCEP and enrollment ----
 	mux.Handle(endpointSCEP, scepHandler)
 	prof := enroll.Options{
@@ -325,7 +350,7 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		// ---- blueprints, groups, devices, platform applicability, schemas, OS releases ----
 		bpAPI := &blueprints.API{Engine: engine, Applicability: profileRules, OSReleases: relFeed, SchemaRefresher: schemaFeed}
 		bpHandler := nlhttp.NewSimpleBasicAuthHandler(http.StripPrefix("/v1", bpAPI.Handler()), "fleetcore", cfg.APIKey, "fleetcore")
-		for _, p := range []string{"/v1/blueprints", "/v1/blueprints/", "/v1/groups", "/v1/groups/", "/v1/devices/", "/v1/applicability", "/v1/applicability/", "/v1/schemas", "/v1/schemas/", "/v1/os-releases", "/v1/os-releases/"} {
+		for _, p := range []string{"/v1/blueprints", "/v1/blueprints/", "/v1/groups", "/v1/groups/", "/v1/devices/", "/v1/applicability", "/v1/applicability/", "/v1/schemas", "/v1/schemas/", "/v1/os-releases", "/v1/os-releases/", "/v1/ddm/"} {
 			mux.Handle(p, bpHandler)
 		}
 	}

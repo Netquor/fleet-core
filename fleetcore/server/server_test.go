@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"math/big"
@@ -24,6 +25,7 @@ import (
 	scepclient "github.com/micromdm/scep/v2/client"
 	"github.com/micromdm/scep/v2/cryptoutil/x509util"
 	"github.com/smallstep/scep"
+	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
@@ -359,6 +361,103 @@ func TestEnrollEndToEnd(t *testing.T) {
 		_, b := api("GET", "/v1/blueprints/wifi/status", "")
 		return strings.Contains(b, `"applied":1`)
 	})
+	// 4d. Declarative device management: the device is told to sync, fetches its declarations over the DeclarativeManagement check-in, and reports status.
+	if err := srv.Blueprints.Store.SetDeviceFields(ctx, udid, bson.D{{Key: "supervised", Value: true}}, true); err != nil {
+		t.Fatal(err)
+	}
+	pwBody, _ := json.Marshal(map[string]any{"id": "pw", "name": "Passcode", "enabled": true, "scope": map[string]any{"field": "platform", "op": "eq", "value": "macOS"},
+		"items": []any{map[string]any{"id": "passcode", "kind": "declaration", "declaration_type": "com.apple.configuration.passcode.settings", "declaration": map[string]any{"RequirePasscode": true, "MinimumLength": 10}}}})
+	if code, b := api("POST", "/v1/blueprints", string(pwBody)); code != 201 {
+		t.Fatalf("create declaration blueprint: %d %s", code, b)
+	}
+	dmSync := false
+	for i := 0; i < 100 && !dmSync; i++ {
+		code, b := post("/mdm", mdmCT, id, idle, false)
+		if code != 200 || len(strings.TrimSpace(b)) == 0 {
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+		var c struct {
+			CommandUUID string
+			Command     struct{ RequestType string }
+		}
+		if err := plist.Unmarshal([]byte(b), &c); err != nil {
+			t.Fatal(err)
+		}
+		dmSync = dmSync || c.Command.RequestType == "DeclarativeManagement"
+		post("/mdm", mdmCT, id, `<?xml version="1.0"?><plist version="1.0"><dict><key>CommandUUID</key><string>`+c.CommandUUID+`</string><key>Status</key><string>Acknowledged</string><key>UDID</key><string>`+udid+`</string></dict></plist>`, false)
+	}
+	if !dmSync {
+		t.Fatal("the device was never told to sync its declarations")
+	}
+	dm := func(endpoint, data string) (int, string) {
+		d := ""
+		if data != "" {
+			d = `<key>Data</key><data>` + base64.StdEncoding.EncodeToString([]byte(data)) + `</data>`
+		}
+		return post("/mdm", checkin, id, `<?xml version="1.0"?><plist version="1.0"><dict><key>MessageType</key><string>DeclarativeManagement</string><key>UDID</key><string>`+udid+`</string><key>Endpoint</key><string>`+endpoint+`</string>`+d+`</dict></plist>`, false)
+	}
+	code, b = dm("tokens", "")
+	if code != 200 || !strings.Contains(b, "DeclarationsToken") {
+		t.Fatalf("tokens: %d %s", code, b)
+	}
+	code, b = dm("declaration-items", "")
+	var items struct {
+		Declarations struct {
+			Configurations []struct{ Identifier, ServerToken string }
+		}
+	}
+	_ = json.Unmarshal([]byte(b), &items)
+	var pwToken string
+	for _, c := range items.Declarations.Configurations {
+		if c.Identifier == "fc.pw.passcode" {
+			pwToken = c.ServerToken
+		}
+	}
+	if code != 200 || pwToken == "" {
+		t.Fatalf("declaration-items: %d %s", code, b)
+	}
+	if code, b := dm("declaration/configuration/fc.pw.passcode", ""); code != 200 || !strings.Contains(b, `"MinimumLength":10`) {
+		t.Fatalf("declaration: %d %s", code, b)
+	}
+	if code, _ := dm("declaration/configuration/nope", ""); code != 404 {
+		t.Errorf("a missing declaration got %d, want 404", code)
+	}
+	report := `{"StatusItems":{"device.operating-system.version":"15.0","management.declarations":{"configurations":[{"identifier":"fc.pw.passcode","server-token":"` + pwToken + `","active":true,"valid":"valid"}],"activations":[],"assets":[],"management":[]}},"Errors":[]}`
+	if code, b := dm("status", report); code != 200 {
+		t.Fatalf("status: %d %s", code, b)
+	}
+	waitFor("the declaration to show applied", func() bool {
+		_, b := api("GET", "/v1/blueprints/pw/status", "")
+		return strings.Contains(b, `"applied":1`)
+	})
+
+	// 4e. The profile of the first blueprint now reaches the (supervised) Mac as a legacy-profile declaration; the device downloads it with its identity, and nobody else can.
+	var profileURL string
+	waitFor("the Wi-Fi profile to move to declarative delivery", func() bool {
+		_, b := dm("declaration/configuration/fc.wifi.item-1", "")
+		var wire struct{ Payload struct{ ProfileURL string } }
+		_ = json.Unmarshal([]byte(b), &wire)
+		profileURL = wire.Payload.ProfileURL
+		return profileURL != ""
+	})
+	path := profileURL[strings.Index(profileURL, "/ddm/profile/"):]
+	if code, b := post(path, "application/x-apple-aspen-config", id, "", false); code != 200 || !strings.Contains(b, "com.test.wifi") {
+		t.Errorf("the device could not download its profile: %d %.80s", code, b)
+	}
+	if code, _ := post(path, "application/x-apple-aspen-config", stranger, "", false); code < 400 {
+		t.Errorf("a certificate from another CA downloaded the profile: %d", code)
+	}
+	if code, _ := post(path, "application/x-apple-aspen-config", nil, "", false); code < 400 {
+		t.Errorf("an anonymous download got %d", code)
+	}
+
+	if code, b := api("GET", "/v1/ddm/coverage", ""); code != 200 || !strings.Contains(b, "com.apple.wifi.managed") || !strings.Contains(b, "applications_by_delivery") {
+		t.Errorf("coverage: %d %.200s", code, b)
+	}
+	if code, b := api("GET", "/v1/ddm/devices/"+udid, ""); code != 200 || !strings.Contains(b, "fc.pw.passcode") {
+		t.Errorf("ddm device: %d %.200s", code, b)
+	}
 	if code, b := api("GET", "/v1/schemas", ""); code != 200 || !strings.Contains(b, `"commands"`) {
 		t.Errorf("schemas: %d %s", code, b)
 	}

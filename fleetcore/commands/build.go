@@ -347,3 +347,9 @@ func listAllowed(list []any) string {
 	}
 	return strings.Join(parts, ", ")
 }
+
+// Check validates a JSON object against a list of schema keys (a declaration's payload, say) and returns what is wrong. Unlike Build it does not convert anything.
+func Check(keys []Key, in map[string]any, platform string) []Problem {
+	_, ps := convertDict(keys, in, "", platform)
+	return ps
+}

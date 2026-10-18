@@ -6,6 +6,7 @@ import (
 	"sort"
 
 	"github.com/micromdm/nanomdm/fleetcore/commands"
+	"github.com/micromdm/nanomdm/fleetcore/schemas"
 )
 
 var idPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
@@ -33,6 +34,11 @@ func (b *Blueprint) Prepare() error {
 		seen[it.ID] = true
 		switch it.Kind {
 		case "profile":
+			switch it.Delivery {
+			case "", "auto", "profile", "declarative":
+			default:
+				return fmt.Errorf("item %s: delivery is auto, declarative or profile", it.ID)
+			}
 			id, err := ProfileIdentifier(it.Payload)
 			if err != nil {
 				return fmt.Errorf("item %s: %w", it.ID, err)
@@ -52,8 +58,31 @@ func (b *Blueprint) Prepare() error {
 			if _, _, ps := commands.Build(cmd, it.Params, commands.Options{}); len(ps) > 0 {
 				return fmt.Errorf("item %s: %s", it.ID, ps[0].Error())
 			}
+		case "declaration":
+			def, ok := schemas.Current().Declaration(it.DeclarationType)
+			if !ok || def.Kind != "configuration" {
+				return fmt.Errorf("item %s: %q is not a declarative management configuration type", it.ID, it.DeclarationType)
+			}
+			if ps := commands.Check(def.Keys, it.Declaration, ""); len(ps) > 0 {
+				return fmt.Errorf("item %s: %s", it.ID, ps[0].Error())
+			}
+		case "os_update":
+			t := it.Target
+			if t == "" {
+				it.Target = "latest-in-major"
+			} else if t != "latest" && t != "latest-in-major" {
+				if _, ok := schemas.VersionNum(t); !ok {
+					return fmt.Errorf("item %s: target must be latest, latest-in-major or a version such as 27.0.1", it.ID)
+				}
+			}
+			if it.DeadlineDays < 0 || it.DeadlineDays > 365 {
+				return fmt.Errorf("item %s: deadline_days is 0 to 365", it.ID)
+			}
+			if it.DeadlineHour != nil && (*it.DeadlineHour < 0 || *it.DeadlineHour > 23) {
+				return fmt.Errorf("item %s: deadline_hour is 0 to 23", it.ID)
+			}
 		default:
-			return fmt.Errorf("item %s: kind must be profile or command", it.ID)
+			return fmt.Errorf("item %s: kind must be profile, command, declaration or os_update", it.ID)
 		}
 	}
 	last := 0

@@ -126,7 +126,7 @@ func (r *Refresher) Check(ctx context.Context) (*Set, bool, error) {
 	}
 	// Refuse a snapshot that lost most of what the current one has (a broken download or a restructured repository).
 	cur := Current()
-	if len(s.Commands)*10 < len(cur.Commands)*8 || len(s.Profiles)*10 < len(cur.Profiles)*8 {
+	if len(s.Commands)*10 < len(cur.Commands)*8 || len(s.Profiles)*10 < len(cur.Profiles)*8 || len(s.Declarations)*10 < len(cur.Declarations)*8 {
 		return cur, false, fmt.Errorf("release %s has %d commands and %d profiles against %d and %d: not using it", sha[:8], len(s.Commands), len(s.Profiles), len(cur.Commands), len(cur.Profiles))
 	}
 	if r.DB != nil {

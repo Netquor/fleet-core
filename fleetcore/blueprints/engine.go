@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -16,6 +17,7 @@ import (
 	"github.com/micromdm/nanolib/log"
 	"github.com/micromdm/nanomdm/fleetcore/applicability"
 	"github.com/micromdm/nanomdm/fleetcore/commands"
+	"github.com/micromdm/nanomdm/fleetcore/ddm"
 	"github.com/micromdm/nanomdm/fleetcore/osreleases"
 	"github.com/micromdm/plist"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -64,9 +66,13 @@ type Engine struct {
 	Enq      Enqueuer
 	Profiles *applicability.Registry
 	Releases *osreleases.Catalog
-	Logger   log.Logger
-	Cfg      Config
-	Now      func() time.Time
+	// DDM, if set, enables declarative device management items (declarations and software updates).
+	DDM *ddm.Store
+	// BaseURL is the server's public address; legacy-profile declarations point devices at it. Without it profiles are always delivered as MDM profiles.
+	BaseURL string
+	Logger  log.Logger
+	Cfg     Config
+	Now     func() time.Time
 
 	mu       sync.Mutex
 	cached   []compiled
@@ -189,6 +195,13 @@ type want struct {
 	send       []byte // the command plist
 	uuid       string
 	held       bool // not yet this device's turn in a staged rollout
+	decls      []ddm.Declaration
+	cfgToken   string
+	// declarative: delivered through declarative management (a declaration, a software update, or a profile wrapped as a legacy-profile declaration).
+	declarative bool
+	profileKey  string // the stored profile body the legacy-profile declaration points at
+	profileBody []byte
+	migrating   bool // a profile already installed by command is being removed before the declaration takes over
 }
 
 func appKey(bp, item string) string { return bp + "\x1f" + item }
@@ -282,6 +295,25 @@ func (e *Engine) Reconcile(ctx context.Context, d *Device) (time.Time, error) {
 					break
 				}
 				w.hash = it.Hash() + "|" + shortHash(res.Profile)
+				if it.Delivery != "profile" && e.DDM != nil && e.BaseURL != "" {
+					okLegacy, whyNot := declGate(d, typeLegacy)
+					okBase, whyBase := declGate(d, typeStatusSubscriptions)
+					switch {
+					case okLegacy && okBase:
+						w.declarative, w.profileKey, w.profileBody = true, shortHash(res.Profile), res.Profile
+						w.decls = legacyDeclarations(&bp, it, strings.TrimRight(e.BaseURL, "/")+"/ddm/profile/"+w.profileKey)
+						w.cfgToken = w.decls[0].Token()
+						w.hash += "|decl|" + w.cfgToken
+					case it.Delivery == "declarative":
+						if !okLegacy {
+							whyBase = whyNot
+						}
+						w.state, w.note = StateNA, "declarative delivery is not possible for this device: "+whyBase
+					}
+					if w.declarative || w.state == StateNA {
+						break
+					}
+				}
 				cmd, _ := commandsGet("InstallProfile")
 				body, uuid, ps := commands.Build(cmd, map[string]any{"Payload": base64.StdEncoding.EncodeToString(res.Profile)}, commands.Options{Platform: d.Platform, OSVersion: d.OSVersion})
 				if len(ps) > 0 {
@@ -302,6 +334,42 @@ func (e *Engine) Reconcile(ctx context.Context, d *Device) (time.Time, error) {
 					break
 				}
 				w.send, w.uuid = body, uuid
+			case "declaration", "os_update":
+				if e.DDM == nil {
+					w.state, w.note, w.hash = StateNA, "declarative management is not enabled on this server", it.Hash()
+					break
+				}
+				w.hash = it.Hash()
+				w.declarative = true
+				if ok, why := declGate(d, typeStatusSubscriptions); !ok {
+					w.state, w.note = StateNA, "this device cannot take declarative management: "+why
+					break
+				}
+				if it.Kind == "declaration" {
+					if ok, why := declGate(d, it.DeclarationType); !ok {
+						w.state, w.note = StateNA, why
+						break
+					}
+					w.decls = declarationFor(&bp, it)
+				} else {
+					decls, target, note, applicable := e.osUpdateFor(d, &bp, it)
+					w.hash += "|" + target
+					w.note = note
+					if !applicable {
+						w.state = StateNA
+						break
+					}
+					w.decls = decls
+					if len(decls) == 0 {
+						w.state = StateApplied // nothing to enforce: the device is where it should be
+					}
+				}
+				for _, dd := range w.decls {
+					if dd.Kind == ddm.KindConfiguration {
+						w.cfgToken = dd.Token()
+						w.hash += "|" + w.cfgToken
+					}
+				}
 			default:
 				continue
 			}
@@ -310,12 +378,22 @@ func (e *Engine) Reconcile(ctx context.Context, d *Device) (time.Time, error) {
 		}
 	}
 
+	// 2a. declarations: the device's whole set is recomputed and compared with the stored one; only a difference is stored and the device told to sync
+	if e.DDM != nil {
+		if err := e.reconcileDeclarations(ctx, d, wants, have, osCtx, now, soonest); err != nil {
+			return next, err
+		}
+	}
+
 	// 2. send what is missing or changed
 	for _, w := range wants {
+		if w.declarative {
+			continue
+		}
 		k := appKey(w.bp.ID, w.item.ID)
 		a := have[k]
 		sameHash := a != nil && a.Hash == w.hash
-		record := Application{Device: d.ID, Blueprint: w.bp.ID, Item: w.item.ID, Kind: w.item.Kind, Identifier: w.identifier, Hash: w.hash, Context: osCtx, Note: w.note}
+		record := Application{Device: d.ID, Blueprint: w.bp.ID, Item: w.item.ID, Kind: w.item.Kind, Identifier: w.identifier, Hash: w.hash, Delivery: "profile", Context: osCtx, Note: w.note}
 		switch {
 		case w.state == StateNA:
 			if !sameHash || a.State != StateNA || a.Context != osCtx {
@@ -399,7 +477,7 @@ func (e *Engine) Reconcile(ctx context.Context, d *Device) (time.Time, error) {
 	// 4. keep the device's OS version fresh: it decides what applies and which devices are out of date
 	if d.Platform != "" && now.Sub(d.OSCheckedAt) >= e.Cfg.OSCheckInterval && now.Sub(d.OSQueryAt) >= 6*time.Hour {
 		cmd, _ := commandsGet("DeviceInformation")
-		body, _, ps := commands.Build(cmd, map[string]any{"Queries": []any{"OSVersion", "BuildVersion", "DeviceName", "ProductName", "Model", "SerialNumber"}}, commands.Options{Platform: d.Platform})
+		body, _, ps := commands.Build(cmd, map[string]any{"Queries": []any{"OSVersion", "BuildVersion", "DeviceName", "ProductName", "Model", "SerialNumber", "IsSupervised"}}, commands.Options{Platform: d.Platform})
 		if len(ps) == 0 {
 			if err := e.Enq.Enqueue(ctx, []string{d.ID}, body); err == nil {
 				_ = e.Store.SetDeviceFields(ctx, d.ID, bson.D{{Key: "os_query_at", Value: now}}, false)
@@ -442,4 +520,110 @@ func ProfileIdentifier(payload []byte) (string, error) {
 		return "", errors.New("the profile has no PayloadIdentifier")
 	}
 	return p.PayloadIdentifier, nil
+}
+
+// reconcileDeclarations stores the device's declaration set, records each declarative item's state, and tells the device to sync when its set changed.
+func (e *Engine) reconcileDeclarations(ctx context.Context, d *Device, wants []*want, have map[string]*Application, osCtx string, now time.Time, soonest func(time.Time)) error {
+	decls := systemDeclarations(d)
+	var keepKeys []string
+	var current []ddm.Declaration
+	for _, w := range wants {
+		if !w.declarative {
+			continue
+		}
+		k := appKey(w.bp.ID, w.item.ID)
+		a := have[k]
+		sameHash := a != nil && a.Hash == w.hash
+		rec := Application{Device: d.ID, Blueprint: w.bp.ID, Item: w.item.ID, Kind: w.item.Kind, Identifier: w.identifier, Hash: w.hash, Delivery: "declarative", Context: osCtx, Note: w.note, ServerToken: w.cfgToken}
+		// A profile already installed by command moves to declarative delivery by being removed first; the declaration follows once the device confirms.
+		if w.item.Kind == "profile" && a != nil && a.Delivery != "declarative" && a.State != StateNA {
+			if a.State != StateRemoving || a.UpdatedAt.Add(e.Cfg.PendingTimeout).Before(now) {
+				cmd, _ := commandsGet("RemoveProfile")
+				body, uuid, ps := commands.Build(cmd, map[string]any{"Identifier": w.identifier}, commands.Options{Platform: d.Platform, OSVersion: d.OSVersion})
+				if len(ps) > 0 {
+					return errors.New(ps[0].Error())
+				}
+				if err := e.Enq.Enqueue(ctx, []string{d.ID}, body); err != nil {
+					return fmt.Errorf("queueing removal of %s: %w", w.identifier, err)
+				}
+				a.State, a.CommandUUID, a.Note = StateRemoving, uuid, "moving to declarative delivery"
+				if err := e.Store.PutApplication(ctx, *a); err != nil {
+					return err
+				}
+				soonest(now.Add(e.Cfg.PendingTimeout))
+			}
+			continue
+		}
+		switch {
+		case w.state == StateNA:
+			rec.State = StateNA
+		case w.state == StateApplied: // an update item for a device that is already there
+			rec.State = StateApplied
+		case w.held && !sameHash:
+			// Not this device's turn for the change: leave what it has (the previous version of this item's declarations) in place.
+			if current == nil {
+				current, _ = e.DDM.List(ctx, d.ID)
+			}
+			for _, c := range current {
+				if c.Source == w.bp.ID+"/"+w.item.ID {
+					decls = append(decls, c)
+				}
+			}
+			continue
+		default:
+			decls = append(decls, w.decls...)
+			if w.profileKey != "" {
+				if err := e.DDM.PutProfile(ctx, d.ID, w.profileKey, w.profileBody); err != nil {
+					return err
+				}
+				keepKeys = append(keepKeys, w.profileKey)
+			}
+			rec.State = StatePending
+			if sameHash {
+				rec.State, rec.Error, rec.Attempts = a.State, a.Error, a.Attempts // the status channel moves it on
+			}
+		}
+		if a == nil || a.Hash != rec.Hash || a.State != rec.State || a.Note != rec.Note || a.Context != rec.Context {
+			if err := e.Store.PutApplication(ctx, rec); err != nil {
+				return err
+			}
+		}
+	}
+	changed, st, err := e.DDM.Replace(ctx, d.ID, decls)
+	if err != nil {
+		return err
+	}
+	// Profiles still referenced by a declaration of the device stay downloadable; others go.
+	for _, c := range decls {
+		if c.Type == typeLegacy {
+			if u, _ := c.Payload["ProfileURL"].(string); u != "" {
+				keepKeys = append(keepKeys, u[strings.LastIndex(u, "/")+1:])
+			}
+		}
+	}
+	if err := e.DDM.PruneProfiles(ctx, d.ID, keepKeys); err != nil {
+		return err
+	}
+	if len(decls) == 0 && st.Token == "" {
+		return nil // never had any: nothing to tell the device
+	}
+	needNudge := changed || st.NotifiedToken != st.Token || (st.SyncedToken != st.Token && now.Sub(st.NotifiedAt) >= e.Cfg.PendingTimeout)
+	if !needNudge {
+		if st.SyncedToken != st.Token {
+			soonest(st.NotifiedAt.Add(e.Cfg.PendingTimeout))
+		}
+		return nil
+	}
+	// The command carries the tokens (Apple allows this), so a device that is already current skips its first round trip.
+	tokens, _ := json.Marshal(map[string]any{"SyncTokens": map[string]any{"DeclarationsToken": st.Token, "Timestamp": st.UpdatedAt.UTC().Format(time.RFC3339)}})
+	cmd, _ := commandsGet("DeclarativeManagement")
+	body, _, ps := commands.Build(cmd, map[string]any{"Data": base64.StdEncoding.EncodeToString(tokens)}, commands.Options{Platform: d.Platform, OSVersion: d.OSVersion})
+	if len(ps) > 0 {
+		return errors.New(ps[0].Error())
+	}
+	if err := e.Enq.Enqueue(ctx, []string{d.ID}, body); err != nil {
+		return fmt.Errorf("telling the device to sync declarations: %w", err)
+	}
+	soonest(now.Add(e.Cfg.PendingTimeout))
+	return e.DDM.Notified(ctx, d.ID, st.Token)
 }

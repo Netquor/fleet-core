@@ -12,6 +12,7 @@ import (
 	"github.com/micromdm/nanolib/log"
 	"github.com/micromdm/nanolib/log/stdlogfmt"
 	"github.com/micromdm/nanomdm/fleetcore/applicability"
+	"github.com/micromdm/nanomdm/fleetcore/ddm"
 	"github.com/micromdm/nanomdm/fleetcore/osreleases"
 	"github.com/micromdm/nanomdm/mdm"
 	"github.com/micromdm/plist"
@@ -97,6 +98,7 @@ type fixture struct {
 	enq   *recorder
 	obs   *Observer
 	rel   *osreleases.Catalog
+	ddm   *ddm.Store
 	now   time.Time
 }
 
@@ -129,6 +131,12 @@ func newFixture(t *testing.T) *fixture {
 	f.eng.Now = func() time.Time { return f.now }
 	st.Now = func() time.Time { return f.now }
 	f.obs = &Observer{Store: st, Now: func() time.Time { return f.now }}
+	f.ddm, err = ddm.NewStore(ctx, db, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.ddm.Now = func() time.Time { return f.now }
+	f.eng.DDM = f.ddm
 	return f
 }
 

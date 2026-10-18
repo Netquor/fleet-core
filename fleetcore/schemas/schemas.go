@@ -26,6 +26,22 @@ type OSInfo struct {
 	UserEnrollment string `json:"user_enrollment,omitempty"`
 	DeviceChannel  *bool  `json:"device_channel,omitempty"`
 	UserChannel    *bool  `json:"user_channel,omitempty"`
+	// AllowedEnrollments and AllowedScopes (declarations and status items): which kinds of enrollment (supervised, device, user, local) and scopes (system, user) take it.
+	AllowedEnrollments []string `json:"allowed_enrollments,omitempty"`
+	AllowedScopes      []string `json:"allowed_scopes,omitempty"`
+}
+
+// AllowsEnrollment reports whether an enrollment kind may receive it; an entry that lists none allows every kind.
+func (o OSInfo) AllowsEnrollment(kind string) bool {
+	if len(o.AllowedEnrollments) == 0 {
+		return true
+	}
+	for _, k := range o.AllowedEnrollments {
+		if k == kind {
+			return true
+		}
+	}
+	return false
 }
 
 // Unsupported reports whether the OS entry says the thing does not exist there.
@@ -109,16 +125,49 @@ type Profile struct {
 	Keys        []Key             `json:"keys,omitempty"`
 }
 
+// Declaration is one declarative device management declaration type (a configuration, activation, asset or management declaration).
+type Declaration struct {
+	Type        string            `json:"type"` // com.apple.configuration.softwareupdate.enforcement.specific
+	Kind        string            `json:"kind"` // configuration, activation, asset, management
+	Title       string            `json:"title"`
+	Description string            `json:"description,omitempty"`
+	Apply       string            `json:"apply,omitempty"` // "multiple", "single" or "combined": how several of them on one device interact
+	OS          map[string]OSInfo `json:"os,omitempty"`
+	Keys        []Key             `json:"keys,omitempty"`
+}
+
+// StatusItem is a status item a device can report over the declarative status channel.
+type StatusItem struct {
+	Name        string            `json:"name"` // device.operating-system.version
+	Title       string            `json:"title"`
+	Description string            `json:"description,omitempty"`
+	OS          map[string]OSInfo `json:"os,omitempty"`
+}
+
 // Set is a complete snapshot of one Apple release.
 type Set struct {
 	Ref       string     `json:"ref"`
 	FetchedAt time.Time  `json:"fetched_at"`
 	Commands  []*Command `json:"commands"`
 	Profiles  []*Profile `json:"profiles"`
+	// Declarations and StatusItems are the declarative management definitions.
+	Declarations []*Declaration `json:"declarations,omitempty"`
+	StatusItems  []*StatusItem  `json:"status_items,omitempty"`
 
 	cmds  map[string]*Command
 	profs map[string]*Profile
+	decls map[string]*Declaration
+	stats map[string]*StatusItem
 }
+
+// Declaration returns the definition of a declaration type.
+func (s *Set) Declaration(declType string) (*Declaration, bool) {
+	d, ok := s.decls[declType]
+	return d, ok
+}
+
+// StatusItem returns the definition of a status item.
+func (s *Set) StatusItem(name string) (*StatusItem, bool) { d, ok := s.stats[name]; return d, ok }
 
 // Command returns the command with that RequestType.
 func (s *Set) Command(requestType string) (*Command, bool) {
@@ -135,6 +184,16 @@ func (s *Set) Profile(payloadType string) (*Profile, bool) {
 func (s *Set) index() {
 	s.cmds = make(map[string]*Command, len(s.Commands))
 	s.profs = make(map[string]*Profile, len(s.Profiles))
+	s.decls = make(map[string]*Declaration, len(s.Declarations))
+	s.stats = make(map[string]*StatusItem, len(s.StatusItems))
+	for _, d := range s.Declarations {
+		s.decls[d.Type] = d
+	}
+	for _, d := range s.StatusItems {
+		s.stats[d.Name] = d
+	}
+	sort.Slice(s.Declarations, func(i, j int) bool { return s.Declarations[i].Type < s.Declarations[j].Type })
+	sort.Slice(s.StatusItems, func(i, j int) bool { return s.StatusItems[i].Name < s.StatusItems[j].Name })
 	for _, c := range s.Commands {
 		c.Destructive = destructive[c.RequestType]
 		s.cmds[c.RequestType] = c

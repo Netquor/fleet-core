@@ -9,6 +9,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"time"
 )
 
@@ -29,6 +31,8 @@ type Device struct {
 	EnrolledAt time.Time `bson:"enrolled_at,omitempty" json:"enrolled_at,omitempty"`
 	LastSeen   time.Time `bson:"last_seen,omitempty" json:"last_seen,omitempty"`
 	Active     bool      `bson:"active" json:"active"`
+	// Supervised is learned from the device (IsSupervised); nil until known. Many declarations need a supervised device.
+	Supervised *bool `bson:"supervised,omitempty" json:"supervised,omitempty"`
 	// OSQueryAt is when the engine last asked the device for its OS version (DeviceInformation); OSCheckedAt when it last answered.
 	OSQueryAt   time.Time `bson:"os_query_at,omitempty" json:"-"`
 	OSCheckedAt time.Time `bson:"os_checked_at,omitempty" json:"os_checked_at,omitempty"`
@@ -55,10 +59,26 @@ type Item struct {
 	// Profile: the configuration profile (a .mobileconfig, base64 in JSON). Identifier is its PayloadIdentifier, found from the profile if left empty.
 	Identifier string `bson:"identifier,omitempty" json:"identifier,omitempty"`
 	Payload    []byte `bson:"payload,omitempty" json:"payload,omitempty"`
+	// Delivery of a profile: "auto" (the default) sends it as a legacy-profile declaration when the device takes declarative management, and as an MDM profile otherwise;
+	// "declarative" insists on declarative management (a device that cannot is told so); "profile" always uses the MDM InstallProfile command.
+	Delivery string `bson:"delivery,omitempty" json:"delivery,omitempty"`
 
-	// Command: any MDM command from the catalog. Once: run it once per change of the item, not on every drift check.
+	// Command: any MDM command from the catalog. Sent once per change of the item, not on every drift check.
 	RequestType string         `bson:"request_type,omitempty" json:"request_type,omitempty"`
 	Params      map[string]any `bson:"params,omitempty" json:"params,omitempty"`
+
+	// Declaration: a declarative management configuration (kind "declaration"), for example com.apple.configuration.passcode.settings. It is activated automatically unless NoActivation.
+	DeclarationType string         `bson:"declaration_type,omitempty" json:"declaration_type,omitempty"`
+	Declaration     map[string]any `bson:"declaration,omitempty" json:"declaration,omitempty"`
+	NoActivation    bool           `bson:"no_activation,omitempty" json:"no_activation,omitempty"`
+
+	// Software update (kind "os_update"): move devices to a release by a deadline, with declarative management.
+	// Target is "latest" (the newest release the device's hardware supports), "latest-in-major" (the newest of its own major version), or a version such as "27.0.1".
+	// The deadline is DeadlineDays (default 7) after the release was published, or after this item last changed if that is later, at DeadlineHour local time (default 17).
+	Target       string `bson:"target,omitempty" json:"target,omitempty"`
+	DeadlineDays int    `bson:"deadline_days,omitempty" json:"deadline_days,omitempty"`
+	DeadlineHour *int   `bson:"deadline_hour,omitempty" json:"deadline_hour,omitempty"`
+	DetailsURL   string `bson:"details_url,omitempty" json:"details_url,omitempty"`
 }
 
 // Hash identifies the item's content: when it changes, devices get the new version.
@@ -69,6 +89,14 @@ func (i Item) Hash() string {
 	if i.Params != nil {
 		b, _ := json.Marshal(i.Params) // encoding/json sorts map keys
 		h.Write(b)
+	}
+	h.Write([]byte(i.Delivery))
+	if i.Kind == "declaration" || i.Kind == "os_update" {
+		b, _ := json.Marshal(i.Declaration)
+		h.Write([]byte(i.DeclarationType + "\x00" + string(b) + "\x00" + i.Target + "\x00" + i.DetailsURL + fmt.Sprint(i.NoActivation, i.DeadlineDays)))
+		if i.DeadlineHour != nil {
+			h.Write([]byte(fmt.Sprint(*i.DeadlineHour)))
+		}
 	}
 	return hex.EncodeToString(h.Sum(nil))[:24]
 }
@@ -104,12 +132,16 @@ type Blueprint struct {
 
 // Application is the record of one item on one device.
 type Application struct {
-	Device      string    `bson:"device" json:"device"`
-	Blueprint   string    `bson:"blueprint" json:"blueprint"`
-	Item        string    `bson:"item" json:"item"`
-	Kind        string    `bson:"kind" json:"kind"`
-	Identifier  string    `bson:"identifier,omitempty" json:"identifier,omitempty"`
-	Hash        string    `bson:"hash" json:"hash"`
+	Device     string `bson:"device" json:"device"`
+	Blueprint  string `bson:"blueprint" json:"blueprint"`
+	Item       string `bson:"item" json:"item"`
+	Kind       string `bson:"kind" json:"kind"`
+	Identifier string `bson:"identifier,omitempty" json:"identifier,omitempty"`
+	Hash       string `bson:"hash" json:"hash"`
+	// Delivery is how it got to the device: "profile" (an MDM command) or "declarative".
+	Delivery string `bson:"delivery,omitempty" json:"delivery,omitempty"`
+	// ServerToken is the token of the declaration the device must report as active (declarative items).
+	ServerToken string    `bson:"server_token,omitempty" json:"server_token,omitempty"`
 	State       string    `bson:"state" json:"state"`                         // pending, applied, failed, removing, not_applicable
 	Context     string    `bson:"context,omitempty" json:"context,omitempty"` // platform and OS version the decision was made for
 	Note        string    `bson:"note,omitempty" json:"note,omitempty"`       // what was left out for the platform, or why it does not apply
@@ -127,3 +159,14 @@ const (
 	StateRemoving = "removing"
 	StateNA       = "not_applicable"
 )
+
+// EnrollKind is how Apple's schemas name the device's enrollment for allowed-enrollments: user, supervised or device.
+func (d *Device) EnrollKind() string {
+	switch {
+	case strings.Contains(d.EnrollType, "User Enrollment"):
+		return "user"
+	case d.Supervised != nil && *d.Supervised:
+		return "supervised"
+	}
+	return "device"
+}

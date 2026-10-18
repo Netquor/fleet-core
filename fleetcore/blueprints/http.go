@@ -9,8 +9,10 @@ import (
 	"strconv"
 
 	"github.com/micromdm/nanomdm/fleetcore/applicability"
+	"github.com/micromdm/nanomdm/fleetcore/ddm"
 	"github.com/micromdm/nanomdm/fleetcore/osreleases"
 	"github.com/micromdm/nanomdm/fleetcore/schemas"
+	"github.com/micromdm/plist"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -412,6 +414,93 @@ func (a *API) Handler() http.Handler {
 		writeJSON(w, 200, p)
 	})
 
+	// ---- declarative device management ----
+	// How far the fleet is on declarative management, and what is left on profiles: where a native declaration exists and where Apple has deprecated a profile payload.
+	mux.HandleFunc("GET /ddm/coverage", func(w http.ResponseWriter, r *http.Request) {
+		bps, err := st.ListBlueprints(r.Context(), false)
+		if err != nil {
+			fail(w, 500, err.Error())
+			return
+		}
+		equiv := ddm.Equivalents()
+		set := schemas.Current()
+		type payloadRow struct {
+			Type         string            `json:"type"`
+			NativeTypes  []string          `json:"native_declarations,omitempty"`
+			DeprecatedIn map[string]string `json:"deprecated_in,omitempty"`
+			RemovedIn    map[string]string `json:"removed_in,omitempty"`
+		}
+		type itemRow struct {
+			Blueprint string       `json:"blueprint"`
+			Item      string       `json:"item"`
+			Kind      string       `json:"kind"`
+			Delivery  string       `json:"delivery,omitempty"`
+			Payloads  []payloadRow `json:"payloads,omitempty"`
+		}
+		var items []itemRow
+		for _, b := range bps {
+			for _, it := range b.Items {
+				row := itemRow{Blueprint: b.ID, Item: it.ID, Kind: it.Kind, Delivery: it.Delivery}
+				if it.Kind == "profile" {
+					for _, typ := range profilePayloadTypes(it.Payload) {
+						pr := payloadRow{Type: typ, NativeTypes: equiv[typ]}
+						if def, ok := set.Profile(typ); ok {
+							for os, info := range def.OS {
+								if info.Deprecated != "" && info.Deprecated != "n/a" {
+									if pr.DeprecatedIn == nil {
+										pr.DeprecatedIn = map[string]string{}
+									}
+									pr.DeprecatedIn[os] = info.Deprecated
+								}
+								if info.Removed != "" && info.Removed != "n/a" {
+									if pr.RemovedIn == nil {
+										pr.RemovedIn = map[string]string{}
+									}
+									pr.RemovedIn[os] = info.Removed
+								}
+							}
+						}
+						row.Payloads = append(row.Payloads, pr)
+					}
+				}
+				items = append(items, row)
+			}
+		}
+		counts, err := st.DeliveryCounts(r.Context())
+		if err != nil {
+			fail(w, 500, err.Error())
+			return
+		}
+		writeJSON(w, 200, map[string]any{"items": items, "applications_by_delivery": counts, "profile_payloads_with_native_declarations": len(equiv)})
+	})
+	mux.HandleFunc("GET /ddm/devices/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if e.DDM == nil {
+			fail(w, 501, "declarative management is not enabled")
+			return
+		}
+		id := r.PathValue("id")
+		decls, err := e.DDM.List(r.Context(), id)
+		if err != nil {
+			fail(w, 500, err.Error())
+			return
+		}
+		state, _ := e.DDM.State(r.Context(), id)
+		status, items, at, _ := e.DDM.Status(r.Context(), id)
+		type row struct {
+			Identifier string `json:"identifier"`
+			Kind       string `json:"kind"`
+			Type       string `json:"type"`
+			Token      string `json:"server_token"`
+			Source     string `json:"source"`
+			Payload    any    `json:"payload,omitempty"`
+		}
+		rows := make([]row, len(decls))
+		for i, d := range decls {
+			rows[i] = row{d.Identifier, d.Kind, d.Type, d.Token(), d.Source, d.Payload}
+		}
+		writeJSON(w, 200, map[string]any{"declarations": rows, "sync": state, "status": status, "status_items": items, "status_at": at})
+	})
+
 	// ---- Apple OS releases ----
 	mux.HandleFunc("GET /os-releases", func(w http.ResponseWriter, r *http.Request) {
 		all := e.Releases.All()
@@ -457,3 +546,22 @@ func (a *API) Handler() http.Handler {
 }
 
 var _ = context.Background
+
+// profilePayloadTypes lists the payload types inside a configuration profile.
+func profilePayloadTypes(profile []byte) []string {
+	var p struct {
+		PayloadContent []struct{ PayloadType string }
+	}
+	if plist.Unmarshal(profile, &p) != nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, c := range p.PayloadContent {
+		if c.PayloadType != "" && !seen[c.PayloadType] {
+			seen[c.PayloadType] = true
+			out = append(out, c.PayloadType)
+		}
+	}
+	return out
+}

@@ -471,3 +471,34 @@ func (s *Store) Status(ctx context.Context, blueprint string) (map[string]int64,
 	}
 	return out, nil
 }
+
+// DeliveryCounts counts applications by kind, delivery and state: how much of the fleet's configuration is on declarative management and how much is still on profiles.
+func (s *Store) DeliveryCounts(ctx context.Context) ([]map[string]any, error) {
+	cur, err := s.db.Collection(cApplied).Aggregate(ctx, mongo.Pipeline{
+		{{Key: "$match", Value: s.scope(bson.D{})}},
+		{{Key: "$group", Value: bson.D{{Key: "_id", Value: bson.D{{Key: "kind", Value: "$kind"}, {Key: "delivery", Value: "$delivery"}, {Key: "state", Value: "$state"}}}, {Key: "n", Value: bson.D{{Key: "$sum", Value: 1}}}}}},
+	})
+	if err != nil {
+		return nil, err
+	}
+	var rows []struct {
+		ID struct {
+			Kind     string `bson:"kind"`
+			Delivery string `bson:"delivery"`
+			State    string `bson:"state"`
+		} `bson:"_id"`
+		N int64 `bson:"n"`
+	}
+	if err := cur.All(ctx, &rows); err != nil {
+		return nil, err
+	}
+	out := make([]map[string]any, 0, len(rows))
+	for _, r := range rows {
+		d := r.ID.Delivery
+		if d == "" {
+			d = "profile"
+		}
+		out = append(out, map[string]any{"kind": r.ID.Kind, "delivery": d, "state": r.ID.State, "count": r.N})
+	}
+	return out, nil
+}

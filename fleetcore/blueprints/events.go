@@ -105,7 +105,11 @@ func (o *Observer) CommandAndReportResults(r *mdm.Request, res *mdm.CommandResul
 	switch res.Status {
 	case "Acknowledged":
 		if a.State == StateRemoving {
-			return nil, o.Store.DeleteApplication(ctx, a.Device, a.Blueprint, a.Item)
+			if err := o.Store.DeleteApplication(ctx, a.Device, a.Blueprint, a.Item); err != nil {
+				return nil, err
+			}
+			// A profile moved to declarative delivery (or any removal) may have something waiting on it.
+			return nil, o.Store.SetDeviceFields(ctx, a.Device, bson.D{}, true)
 		}
 		a.State, a.Error = StateApplied, ""
 	case "Error", "CommandFormatError":
@@ -146,6 +150,12 @@ func (o *Observer) learn(ctx context.Context, id string, q map[string]any) error
 		fields = append(fields, bson.E{Key: "os_version", Value: v})
 		if n, ok := versionNum(v); ok {
 			fields = append(fields, bson.E{Key: "os_num", Value: n})
+		}
+	}
+	if sup, ok := q["IsSupervised"].(bool); ok {
+		fields = append(fields, bson.E{Key: "supervised", Value: sup})
+		if old, err := o.Store.GetDevice(ctx, id); err == nil && (old.Supervised == nil || *old.Supervised != sup) {
+			touch = true // what a device may receive depends on it
 		}
 	}
 	for k, f := range map[string]string{"DeviceName": "name", "SerialNumber": "serial"} {

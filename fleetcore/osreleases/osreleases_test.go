@@ -96,3 +96,58 @@ func TestLiveFeed(t *testing.T) {
 		}
 	}
 }
+
+const gdmf = `{"PublicAssetSets":{
+ "iOS":[{"ProductVersion":"27.0.1","Build":"24A446","PostingDate":"2026-10-12","ExpirationDate":"2027-01-16","SupportedDevices":["iPhone16,1","iPhone17,1"]},
+        {"ProductVersion":"27.0.1","Build":"24A9999","PostingDate":"2026-09-28","ExpirationDate":"2027-01-16","SupportedDevices":["iPhone19,2"]},
+        {"ProductVersion":"26.7.1","Build":"23H30","PostingDate":"2026-10-09","ExpirationDate":"2027-01-16","SupportedDevices":["iPhone12,1","iPhone16,1"]}],
+ "macOS":[{"ProductVersion":"27.0.1","Build":"26A434","PostingDate":"2026-10-12","ExpirationDate":"2027-01-16","SupportedDevices":["J314sAP"]}]},
+ "AssetSets":{"iOS":[{"ProductVersion":"27.0","Build":"24A6437","PostingDate":"2026-09-14","ExpirationDate":"2027-01-16","SupportedDevices":["iPhone16,1"]}]}}`
+
+func TestGDMFSetsAvailabilityAndHardware(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(gdmf)) }))
+	defer srv.Close()
+	var c Catalog
+	r := &Refresher{Catalog: &c, GDMFURL: srv.URL}
+	if n, err := r.CheckGDMF(context.Background()); err != nil || n != 3 {
+		t.Fatalf("%d %v", n, err)
+	}
+	if !c.Available("iOS", "27.0.1") || c.Available("iOS", "27.9") || !c.Available("iPadOS", "27.0.1") {
+		t.Error("availability")
+	}
+	// An old iPhone that Apple's hardware list stops at 26 is moved to the newest it supports, not the newest there is.
+	if b, ok := c.BestFor("iOS", "iPhone12,1", 0); !ok || b.Version != "26.7.1" {
+		t.Errorf("best for iPhone12,1: %+v", b)
+	}
+	if b, ok := c.BestFor("iOS", "iPhone16,1", 0); !ok || b.Version != "27.0.1" {
+		t.Errorf("best for iPhone16,1: %+v", b)
+	}
+	if b, ok := c.BestFor("iOS", "iPhone16,1", 26); !ok || b.Version != "26.7.1" {
+		t.Errorf("best in 26: %+v", b)
+	}
+	// The same version listed twice for different hardware is one release with both lists.
+	if b, ok := c.BestFor("iOS", "iPhone19,2", 0); !ok || b.Version != "27.0.1" {
+		t.Errorf("best for iPhone19,2 (listed only in a separate entry): %+v", b)
+	}
+	// macOS lists board IDs, so hardware is not judged.
+	if b, ok := c.BestFor("macOS", "Mac15,6", 0); !ok || b.Version != "27.0.1" {
+		t.Errorf("best for a Mac: %+v", b)
+	}
+}
+
+// Against the real service when asked for: OSRELEASES_LIVE=1 go test ./fleetcore/osreleases
+func TestLiveGDMF(t *testing.T) {
+	if os.Getenv("OSRELEASES_LIVE") == "" {
+		t.Skip("OSRELEASES_LIVE not set")
+	}
+	var c Catalog
+	r := &Refresher{Catalog: &c}
+	if n, err := r.CheckGDMF(context.Background()); err != nil || n == 0 {
+		t.Fatalf("%d %v", n, err)
+	}
+	b, ok := c.BestFor("iOS", "iPhone16,1", 0)
+	t.Logf("best for iPhone16,1: %s (%s)", b.Version, b.Build)
+	if !ok {
+		t.Error("no release for a current iPhone")
+	}
+}

@@ -59,6 +59,18 @@ func boolPtr(n *yaml.Node) *bool {
 	return nil
 }
 
+func strList(n *yaml.Node) []string {
+	n = resolve(n)
+	if n == nil || n.Kind != yaml.SequenceNode {
+		return nil
+	}
+	var out []string
+	for _, e := range n.Content {
+		out = append(out, str(e))
+	}
+	return out
+}
+
 func osOf(n *yaml.Node) map[string]OSInfo {
 	out := map[string]OSInfo{}
 	for name, v := range mapOf(n) {
@@ -69,6 +81,8 @@ func osOf(n *yaml.Node) map[string]OSInfo {
 		if ue := mapOf(m["userenrollment"]); ue != nil {
 			o.UserEnrollment = str(ue["mode"])
 		}
+		o.AllowedEnrollments = strList(m["allowed-enrollments"])
+		o.AllowedScopes = strList(m["allowed-scopes"])
 		out[name] = o
 	}
 	if len(out) == 0 {
@@ -156,6 +170,14 @@ func (s *Set) Add(kind string, data []byte) error {
 		if rt := str(payload["requesttype"]); rt != "" {
 			s.Commands = append(s.Commands, &Command{RequestType: rt, Title: str(top["title"]), Description: str(top["description"]), Content: str(payload["content"]), OS: osOf(payload["supportedOS"]), Keys: keysOf(top["payloadkeys"])})
 		}
+	case "configuration", "activation", "asset", "management":
+		if dt := str(payload["declarationtype"]); dt != "" {
+			s.Declarations = append(s.Declarations, &Declaration{Type: dt, Kind: kind, Title: str(top["title"]), Description: str(top["description"]), Apply: str(payload["apply"]), OS: osOf(payload["supportedOS"]), Keys: keysOf(top["payloadkeys"])})
+		}
+	case "status":
+		if n := str(payload["statusitemtype"]); n != "" {
+			s.StatusItems = append(s.StatusItems, &StatusItem{Name: n, Title: str(top["title"]), Description: str(top["description"]), OS: osOf(payload["supportedOS"])})
+		}
 	case "profiles":
 		if pt := str(payload["payloadtype"]); pt != "" {
 			s.Profiles = append(s.Profiles, &Profile{PayloadType: pt, Title: str(top["title"]), Description: str(top["description"]), OS: osOf(payload["supportedOS"]), Keys: keysOf(top["payloadkeys"])})
@@ -167,8 +189,12 @@ func (s *Set) Add(kind string, data []byte) error {
 // ParseDir reads a checkout of apple/device-management.
 func ParseDir(root, ref string) (*Set, error) {
 	s := &Set{Ref: ref, FetchedAt: nowFunc()}
-	for _, kind := range []string{"commands", "profiles"} {
-		entries, err := os.ReadDir(path.Join(root, "mdm", kind))
+	for _, d := range []struct{ kind, dir string }{
+		{"commands", "mdm/commands"}, {"profiles", "mdm/profiles"},
+		{"configuration", "declarative/declarations/configurations"}, {"activation", "declarative/declarations/activations"},
+		{"asset", "declarative/declarations/assets"}, {"management", "declarative/declarations/management"}, {"status", "declarative/status"},
+	} {
+		entries, err := os.ReadDir(path.Join(root, d.dir))
 		if err != nil {
 			return nil, err
 		}
@@ -176,12 +202,12 @@ func ParseDir(root, ref string) (*Set, error) {
 			if !strings.HasSuffix(e.Name(), ".yaml") {
 				continue
 			}
-			b, err := os.ReadFile(path.Join(root, "mdm", kind, e.Name()))
+			b, err := os.ReadFile(path.Join(root, d.dir, e.Name()))
 			if err != nil {
 				return nil, err
 			}
-			if err := s.Add(kind, b); err != nil {
-				return nil, fmt.Errorf("%s/%s: %w", kind, e.Name(), err)
+			if err := s.Add(d.kind, b); err != nil {
+				return nil, fmt.Errorf("%s/%s: %w", d.dir, e.Name(), err)
 			}
 		}
 	}
@@ -206,11 +232,14 @@ func ParseTarGz(r io.Reader, ref string) (*Set, error) {
 			return nil, err
 		}
 		kind := ""
-		switch {
-		case strings.Contains(h.Name, "/mdm/commands/"):
-			kind = "commands"
-		case strings.Contains(h.Name, "/mdm/profiles/"):
-			kind = "profiles"
+		for marker, k := range map[string]string{
+			"/mdm/commands/": "commands", "/mdm/profiles/": "profiles",
+			"/declarative/declarations/configurations/": "configuration", "/declarative/declarations/activations/": "activation",
+			"/declarative/declarations/assets/": "asset", "/declarative/declarations/management/": "management", "/declarative/status/": "status",
+		} {
+			if strings.Contains(h.Name, marker) && !strings.Contains(strings.SplitN(h.Name, marker, 2)[1], "/") {
+				kind = k
+			}
 		}
 		if kind == "" || !strings.HasSuffix(h.Name, ".yaml") {
 			continue

@@ -36,4 +36,5 @@ require (
 	github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78 // indirect
 	golang.org/x/sync v0.24.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

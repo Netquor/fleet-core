@@ -1,0 +1,6386 @@
+{
+ "ref": "09f249a06e7e3289930bf6d05f38fb562f748ebf",
+ "commands": [
+  {
+   "request_type": "AccountConfiguration",
+   "title": "Account Configuration Command",
+   "description": "Create and configure a local administrator account on a device.",
+   "content": "When a macOS (v10.11 and later) device is configured via ADE to enroll in an MDM server and the ADE profile has the await_device_configuration flag set to true, the AccountConfiguration command can be sent to the device to have it create the local administrator account (thereby skipping the page to create this account in Setup Assistant). This command can only be sent to a macOS device that is in the AwaitingConfiguration state.",
+   "os": {
+    "iOS": {
+     "introduced": "n/a"
+    },
+    "macOS": {
+     "introduced": "10.11",
+     "requires_dep": true
+    },
+    "tvOS": {
+     "introduced": "n/a"
+    },
+    "visionOS": {
+     "introduced": "n/a"
+    },
+    "watchOS": {
+     "introduced": "n/a"
+    }
+   },
+   "keys": [
+    {
+     "key": "SkipPrimarySetupAccountCreation",
+     "type": "boolean",
+     "default": false,
+     "content": "If `true`, Setup Assistant skips the user interface for setting up primary accounts and disables autologin. If `true`, you must specify a value for `AutoSetupAdminAccounts`."
+    },
+    {
+     "key": "SetPrimarySetupAccountAsRegularUser",
+     "type": "boolean",
+     "default": false,
+     "content": "If `true`, Setup Assistant creates the primary accounts as regular users, and you must specify a value for `AutoSetupAdminAccounts`."
+    },
+    {
+     "key": "PrimaryAccountFullName",
+     "type": "string",
+     "content": "The full name for the primary account. If present, Setup Assistant uses this value to prefill the Full Name field. However, Setup Assistant ignores this value if `DontAutoPopulatePrimaryAccountInfo` is `true`.",
+     "os": {
+      "macOS": {
+       "introduced": "10.15"
+      }
+     }
+    },
+    {
+     "key": "PrimaryAccountUserName",
+     "type": "string",
+     "content": "The account name for the primary account. If present, Setup Assistant uses this value to prefill the User Name field. However, Setup Assistant ignores this value if `DontAutoPopulatePrimaryAccountInfo` is `true`.",
+     "os": {
+      "macOS": {
+       "introduced": "10.15"
+      }
+     }
+    },
+    {
+     "key": "DontAutoPopulatePrimaryAccountInfo",
+     "type": "boolean",
+     "default": false,
+     "content": "If `true`, Setup Assistant ignores the primary account information and requires the user to enter that information. If `false`, Setup Assistant prefills the Full Name field with `PrimaryAccountFullName` and the User Name field with `PrimaryAccountUserName`.",
+     "os": {
+      "macOS": {
+       "introduced": "10.15"
+      }
+     }
+    },
+    {
+     "key": "LockPrimaryAccountInfo",
+     "type": "boolean",
+     "default": false,
+     "content": "If `true`, and you provide values for `PrimaryAccountFullName` or `PrimaryAccountUserName`, Setup Assistant disables editing for the corresponding fields. `DontAutoPopulatePrimaryAccountInfo` must also be 0 (or missing).\n\nIf the user's password is also available from authentication through ConfigurationURL, Setup Assistant automatically creates the primary account with that information and skips showing the user interface to view or edit these fields.",
+     "os": {
+      "macOS": {
+       "introduced": "10.15"
+      }
+     }
+    },
+    {
+     "key": "AutoSetupAdminAccounts",
+     "type": "array",
+     "content": "A dictionary that describes the administrator account to create with Setup Assistant, which uses the first element and ignores additional elements.",
+     "keys": [
+      {
+       "key": "AutoSetupAdminAccountItem",
+       "type": "dictionary",
+       "content": "A dictionary that describes the administrator account to create with Setup Assistant, which uses the first element and ignores additional elements.",
+       "keys": [
+        {
+         "key": "shortName",
+         "type": "string",
+         "required": true,
+         "content": "The short name of the user."
+        },
+        {
+         "key": "fullName",
+         "type": "string",
+         "content": "The full name of the user, which defaults to `shortName` if not specified."
+        },
+        {
+         "key": "passwordHash",
+         "type": "data",
+         "content": "Data that contains the pre-created salted PBKDF2 SHA512 `PasswordHash` for the account."
+        },
+        {
+         "key": "hidden",
+         "type": "boolean",
+         "default": false,
+         "content": "If `true`, this sets the account attribute to make the account hidden in the Login Window and Users \u0026 Groups."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "key": "ManagedLocalUserShortName",
+     "type": "string",
+     "content": "If present, this is the short name of the local account to manage, which can also be the account that results from setting `AutoSetupAdminAccounts` to `true`. Otherwise, only the local account that Setup Assistant creates is a managed account.",
+     "os": {
+      "macOS": {
+       "introduced": "11.0"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "request_type": "ActivationLockBypassCode",
+   "title": "Activation Lock Bypass Code Command",
+   "description": "Get the code to bypass Activation Lock on a device.",
+   "content": "Retrieves the Activation Lock bypass code from the device. This bypass code is only available for 15 days after supervision.",
+   "os": {
+    "iOS": {
+     "introduced": "7.1",
+     "supervised": true
+    },
+    "macOS": {
+     "introduced": "10.15",
+     "supervised": true
+    },
+    "tvOS": {
+     "introduced": "n/a"
+    },
+    "visionOS": {
+     "introduced": "2.0",
+     "supervised": true
+    },
+    "watchOS": {
+     "introduced": "n/a"
+    }
+   }
+  },
+  {
+   "request_type": "ActiveNSExtensions",
+   "title": "Active NSExtensions Command",
+   "description": "Get a list of active extensions for a user on a device.",
+   "content": "Returns information about the active NSExtensions for a particular user.\nNSExtensions are installed and enabled at the user level. There is no concept of \"device\" NSExtensions.\nRequires \"Query Installed Apps\" right; supported on user channel only.",
+   "os": {
+    "iOS": {
+     "introduced": "n/a"
+    },
+    "macOS": {
+     "introduced": "10.13"
+    },
+    "tvOS": {
+     "introduced": "n/a"
+    },
+    "visionOS": {
+     "introduced": "n/a"
+    },
+    "watchOS": {
+     "introduced": "n/a"
+    }
+   },
+   "keys": [
+    {
+     "key": "FilterExtensionPoints",
+     "type": "array",
+     "content": "An array of extension points. If you choose to provide this value, the response only includes the app extensions for the extension points you specify.",
+     "keys": [
+      {
+       "key": "FilterExtensionPointsItem",
+       "type": "string"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "request_type": "ApplyRedemptionCode",
+   "title": "Apply Redemption Code Command",
+   "description": "Complete the installation of an app using a redemption code.",
+   "os": {
+    "iOS": {
+     "introduced": "5.0"
+    },
+    "macOS": {
+     "introduced": "n/a"
+    },
+    "tvOS": {
+     "introduced": "n/a"
+    },
+    "visionOS": {
+     "introduced": "n/a"
+    },
+    "watchOS": {
+     "introduced": "n/a"
+    }
+   },
+   "keys": [
+    {
+     "key": "Identifier",
+     "type": "string",
+     "required": true,
+     "content": "The bundle identifier of the app."
+    },
+    {
+     "key": "RedemptionCode",
+     "type": "string",
+     "required": true,
+     "content": "The redemption code that applies to the app pending installation."
+    }
+   ]
+  },
+  {
+   "request_type": "AvailableOSUpdates",
+   "title": "Available OS Updates Command",
+   "description": "Get a list of available operating-system updates for a device. Removed: use the declarative management `com.apple.configuration.softwareupdate.enforcement.specific` configuration.",
+   "content": "Queries the device for a list of available OS updates. On macOS, a ScheduleOSUpdateScan must be performed to update the results returned by this query.",
+   "os": {
+    "iOS": {
+     "introduced": "9.0",
+     "deprecated": "26.0",
+     "removed": "27.0",
+     "supervised": true
+    },
+    "macOS": {
+     "introduced": "10.11",
+     "deprecated": "26.0",
+     "removed": "27.0"
+    },
+    "tvOS": {
+     "introduced": "12.0",
+     "deprecated": "26.0",
+     "removed": "27.0",
+     "supervised": true
+    },
+    "visionOS": {
+     "introduced": "n/a"
+    },
+    "watchOS": {
+     "introduced": "n/a"
+    }
+   }
+  },
+  {
+   "request_type": "CancelEnhancedLogCollection",
+   "title": "Cancel Enhanced Log Collection Command",
+   "description": "Cancel enhanced log collection on the device.",
+   "content": "This command cancels any active enhanced log collection session on a supervised device. If no session is in progress, the command does nothing and returns `Acknowledged`.",
+   "os": {
+    "iOS": {
+     "introduced": "27.0",
+     "supervised": true
+    },
+    "macOS": {
+     "introduced": "27.0",
+     "supervised": true
+    },
+    "tvOS": {
+     "introduced": "27.0",
+     "supervised": true
+    },
+    "visionOS": {
+     "introduced": "n/a"
+    },
+    "watchOS": {
+     "introduced": "n/a"
+    }
+   }
+  },
+  {
+   "request_type": "CertificateList",
+   "title": "Certificate List Command",
+   "description": "Get a list of installed certificates on a device.",
+   "os": {
+    "iOS": {
+     "introduced": "4.0"
+    },
+    "macOS": {
+     "introduced": "10.7"
+    },
+    "tvOS": {
+     "introduced": "9.0"
+    },
+    "visionOS": {
+     "introduced": "1.1"
+    },
+    "watchOS": {
+     "introduced": "10.0"
+    }
+   },
+   "keys": [
+    {
+     "key": "ManagedOnly",
+     "type": "boolean",
+     "default": false,
+     "content": "If `true`, only include certificates that MDM installed or that are in the same profile as the MDM payload. User-enrolled devices ignore this value and always only include managed certificates.",
+     "os": {
+      "iOS": {
+       "introduced": "13.0"
+      },
+      "macOS": {
+       "introduced": "10.15"
+      },
+      "tvOS": {
+       "introduced": "13.0"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "request_type": "ClearActivationLockBypassCode",
+   "title": "Clear Activation Lock Bypass Code Command",
+   "description": "Clear the Activation Lock bypass code on a device.",
+   "content": "Clears the Activation Lock bypass code from the device.",
+   "os": {
+    "iOS": {
+     "introduced": "7.1",
+     "supervised": true
+    },
+    "macOS": {
+     "introduced": "10.15",
+     "supervised": true
+    },
+    "tvOS": {
+     "introduced": "n/a"
+    },
+    "visionOS": {
+     "introduced": "2.0",
+     "supervised": true
+    },
+    "watchOS": {
+     "introduced": "n/a"
+    }
+   }
+  },
+  {
+   "request_type": "ClearPasscode",
+   "title": "Clear Passcode Command",
+   "description": "Remove the passcode from a device.",
+   "content": "This command allows the server to clear the passcode on the device. This command requires the Device Lock and Passcode Removal right.",
+   "os": {
+    "iOS": {
+     "introduced": "4.0"
+    },
+    "macOS": {
+     "introduced": "n/a"
+    },
+    "tvOS": {
+     "introduced": "n/a"
+    },
+    "visionOS": {
+     "introduced": "1.1"
+    },
+    "watchOS": {
+     "introduced": "10.0"
+    }
+   },
+   "keys": [
+    {
+     "key": "UnlockToken",
+     "type": "data",
+     "required": true,
+     "content": "The unlock token value that the device provides in its `TokenUpdateMessage` check-in message."
+    }
+   ]
+  },
+  {
+   "request_type": "ClearRestrictionsPassword",
+   "title": "Clear Restrictions Password Command",
+   "description": "Clear the Screen Time password and the restrictions on a device.",
+   "os": {
+    "iOS": {
+     "introduced": "8.0",
+     "supervised": true
+    },
+    "macOS": {
+     "introduced": "n/a"
+    },
+    "tvOS": {
+     "introduced": "n/a"
+    },
+    "visionOS": {
+     "introduced": "n/a"
+    },
+    "watchOS": {
+     "introduced": "n/a"
+    }
+   }
+  },
+  {
+   "request_type": "ContentCachingInformation",
+   "title": "Content Caching Information Command",
+   "description": "Get the status of the content caches on a device.",
+   "content": "This command allows the server to query for information about Content Caching.",
+   "os": {
+    "iOS": {
+     "introduced": "n/a"
+    },
+    "macOS": {
+     "introduced": "10.15.4"
+    },
+    "tvOS": {
+     "introduced": "n/a"
+    },
+    "visionOS": {
+     "introduced": "n/a"
+    },
+    "watchOS": {
+     "introduced": "n/a"
+    }
+   }
+  },
+  {
+   "request_type": "DeclarativeManagement",
+   "title": "Declarative Management Command",
+   "description": "Enable your server to support declarative management or trigger a declarative management synchronization operation on the device.",
+   "content": "This command allows the server to turn on the declarative management engine on the device (the first time it is used), or to trigger a declarative management synchronization operation.",
+   "os": {
+    "iOS": {
+     "introduced": "15.0"
+    },
+    "macOS": {
+     "introduced": "13.0"
+    },
+    "tvOS": {
+     "introduced": "16.0"
+    },
+    "visionOS": {
+     "introduced": "1.1"
+    },
+    "watchOS": {
+     "introduced": "10.0"
+    }
+   },
+   "keys": [
+    {
+     "key": "Data",
+     "type": "data",
+     "content": "The base64-encoded declarative management JSON request using a `TokensResponse`."
+    }
+   ]
+  },
+  {
+   "request_type": "DeleteUser",
+   "title": "Delete User Command",
+   "description": "Delete a user's account from a device.",
+   "content": "This command allows the server to delete a user that has an active account on the device.",
+   "os": {
+    "iOS": {
+     "introduced": "9.3"
+    },
+    "macOS": {
+     "introduced": "10.13",
+     "supervised": true
+    },
+    "tvOS": {
+     "introduced": "n/a"
+    },
+    "visionOS": {
+     "introduced": "n/a"
+    },
+    "watchOS": {
+     "introduced": "n/a"
+    }
+   },
+   "keys": [
+    {
+     "key": "UserName",
+     "type": "string",
+     "content": "The user name of the account to delete. The device requires this key when the value for `DeleteAllUsers` is absent or `false`."
+    },
+    {
+     "key": "ForceDeletion",
+     "type": "boolean",
+     "default": false,
+     "content": "If `true`, the system deletes the account even if the user has data that's pending sync to the cloud.",
+     "os": {
+      "macOS": {
+       "introduced": "n/a"
+      }
+     }
+    },
+    {
+     "key": "DeleteAllUsers",
+     "type": "boolean",
+     "default": false,
+     "content": "If `true`, the system attempts to delete all users from the device. If `ForceDeletion` is `false`, the system generates an error instead and doesn't delete users who have data that's pending sync.",
+     "os": {
+      "iOS": {
+       "introduced": "14.0"
+      },
+      "macOS": {
+       "introduced": "n/a"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "request_type": "DeviceConfigured",
+   "title": "Device Configured Command",
+   "description": "Inform the device that it can allow the user to continue in Setup Assistant.",
+   "content": "Informs the device that it can continue past ADE enrollment. Only works on devices in ADE that have their cloud configuration set to await configuration.",
+   "os": {
+    "iOS": {
+     "introduced": "9.0",
+     "supervised": true,
+     "requires_dep": true
+    },
+    "macOS": {
+     "introduced": "10.11",
+     "requires_dep": true
+    },
+    "tvOS": {
+     "introduced": "10.2",
+     "supervised": true
+    },
+    "visionOS": {
+     "introduced": "2.0",
+     "supervised": true,
+     "requires_dep": true
+    },
+    "watchOS": {
+     "introduced": "n/a"
+    }
+   }
+  },
+  {
+   "request_type": "DeviceInformation",
+   "title": "Device Information Command",
+   "description": "Get detailed information about a device.",
+   "content": "This command allows the server to query for specific device information. It's supported in the user channel.",
+   "os": {
+    "iOS": {
+     "introduced": "4.0"
+    },
+    "macOS": {
+     "introduced": "10.7"
+    },
+    "tvOS": {
+     "introduced": "9.0"
+    },
+    "visionOS": {
+     "introduced": "1.1"
+    },
+    "watchOS": {
+     "introduced": "10.0"
+    }
+   },
+   "keys": [
+    {
+     "key": "Queries",
+     "type": "array",
+     "required": true,
+     "content": "An array of query dictionaries to get information about a device.",
+     "keys": [
+      {
+       "key": "QueriesItem",
+       "type": "string",
+       "content": "A query dictionary to get information about a device.",
+       "keys": [
+        {
+         "key": "UDID",
+         "type": "string",
+         "content": "The key to get the unique identifier of the device.",
+         "os": {
+          "iOS": {},
+          "macOS": {},
+          "tvOS": {},
+          "visionOS": {},
+          "watchOS": {}
+         }
+        },
+        {
+         "key": "ProvisioningUDID",
+         "type": "string",
+         "content": "The key to get the device identifier for provisioning profiles. This value differs from the UDID for a Mac with Apple silicon.",
+         "os": {
+          "iOS": {
+           "introduced": "n/a"
+          },
+          "macOS": {
+           "introduced": "11.3"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "OrganizationInfo",
+         "type": "string",
+         "content": "The key to get the contents of `OrganizationInfo`.",
+         "os": {
+          "iOS": {
+           "introduced": "7.0"
+          },
+          "macOS": {
+           "introduced": "10.11"
+          },
+          "tvOS": {
+           "introduced": "9.0"
+          },
+          "visionOS": {},
+          "watchOS": {}
+         }
+        },
+        {
+         "key": "MDMOptions",
+         "type": "string",
+         "content": "The key to get the contents of `MDMOptions`.",
+         "os": {
+          "iOS": {
+           "introduced": "7.0"
+          },
+          "macOS": {
+           "introduced": "11.0"
+          },
+          "tvOS": {
+           "introduced": "9.0"
+          },
+          "visionOS": {},
+          "watchOS": {
+           "introduced": "10.0"
+          }
+         }
+        },
+        {
+         "key": "LastCloudBackupDate",
+         "type": "string",
+         "content": "The key to get the date of the most-recent iCloud backup.",
+         "os": {
+          "iOS": {
+           "introduced": "8.0"
+          },
+          "macOS": {
+           "introduced": "n/a"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {},
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "AwaitingConfiguration",
+         "type": "string",
+         "content": "The key to determine whether the device is waiting for a `Device-Configured-Command` command or `User-Configured-Command` command to continue through Setup Assistant on the device channel or user channel, respectively.",
+         "os": {
+          "iOS": {
+           "introduced": "9.0"
+          },
+          "macOS": {
+           "introduced": "10.11"
+          },
+          "tvOS": {
+           "introduced": "10.2"
+          },
+          "visionOS": {
+           "introduced": "2.0"
+          },
+          "watchOS": {}
+         }
+        },
+        {
+         "key": "iTunesStoreAccountIsActive",
+         "type": "string",
+         "content": "The key to determine whether the iTunes Store account is active. Requires the App Installation access right.",
+         "os": {
+          "iOS": {
+           "introduced": "7.0"
+          },
+          "macOS": {
+           "introduced": "10.9"
+          },
+          "tvOS": {
+           "introduced": "9.0"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {}
+         }
+        },
+        {
+         "key": "iTunesStoreAccountHash",
+         "type": "string",
+         "content": "The key to get a hash of the logged-in iTunes Store account. Also see `GetVppUserRequest`. Requires the App Installation access right.",
+         "os": {
+          "iOS": {
+           "introduced": "8.0"
+          },
+          "macOS": {
+           "introduced": "10.10"
+          },
+          "tvOS": {
+           "introduced": "9.0"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {}
+         }
+        },
+        {
+         "key": "DeviceName",
+         "type": "string",
+         "content": "The key to get the device name. Requires the Device Information access right.",
+         "os": {
+          "iOS": {},
+          "macOS": {},
+          "tvOS": {},
+          "visionOS": {},
+          "watchOS": {}
+         }
+        },
+        {
+         "key": "OSVersion",
+         "type": "string",
+         "content": "The key to get the operating system version. Requires the Device Information access right.",
+         "os": {
+          "iOS": {},
+          "macOS": {},
+          "tvOS": {},
+          "visionOS": {},
+          "watchOS": {}
+         }
+        },
+        {
+         "key": "SupplementalOSVersionExtra",
+         "type": "string",
+         "content": "The key to get the OS update Background Security Improvement version letter, if a Background Security Improvement update is installed. Requires the Device Information access right.",
+         "os": {
+          "iOS": {
+           "introduced": "16.1"
+          },
+          "macOS": {
+           "introduced": "13.0"
+          },
+          "tvOS": {
+           "introduced": "16.1"
+          },
+          "visionOS": {},
+          "watchOS": {}
+         }
+        },
+        {
+         "key": "BuildVersion",
+         "type": "string",
+         "content": "The key to get the operating system version. Requires the Device Information access right.",
+         "os": {
+          "iOS": {},
+          "macOS": {},
+          "tvOS": {},
+          "visionOS": {},
+          "watchOS": {}
+         }
+        },
+        {
+         "key": "SupplementalBuildVersion",
+         "type": "string",
+         "content": "The key to get the build version for the currently installed Background Security Improvement. If there's no installed Background Security Improvement, this value is the same as `BuildVersion`. Requires the Device Information access right.",
+         "os": {
+          "iOS": {
+           "introduced": "16.1"
+          },
+          "macOS": {
+           "introduced": "13.0"
+          },
+          "tvOS": {
+           "introduced": "16.1"
+          },
+          "visionOS": {},
+          "watchOS": {}
+         }
+        },
+        {
+         "key": "ModelName",
+         "type": "string",
+         "content": "The key to get the model name, such as _iPhone_. Requires the Device Information access right.",
+         "os": {
+          "iOS": {},
+          "macOS": {},
+          "tvOS": {},
+          "visionOS": {},
+          "watchOS": {}
+         }
+        },
+        {
+         "key": "Model",
+         "type": "string",
+         "content": "The key to get the model. Requires the Device Information access right.",
+         "os": {
+          "iOS": {},
+          "macOS": {},
+          "tvOS": {},
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {}
+         }
+        },
+        {
+         "key": "ModelNumber",
+         "type": "string",
+         "content": "The key to get the device's hardware model number, including region info, such as `MK1A3LL/A`. Requires the Device Information access right. Requires a Mac with Apple silicon for macOS.",
+         "os": {
+          "iOS": {
+           "introduced": "16.4"
+          },
+          "macOS": {
+           "introduced": "13.3"
+          },
+          "tvOS": {
+           "introduced": "16.4"
+          },
+          "visionOS": {},
+          "watchOS": {}
+         }
+        },
+        {
+         "key": "IsAppleSilicon",
+         "type": "string",
+         "content": "The key to determine whether the device is a Mac with Apple silicon (for example, an Apple M1 chip).",
+         "os": {
+          "iOS": {
+           "introduced": "n/a"
+          },
+          "macOS": {
+           "introduced": "12.0"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "ProductName",
+         "type": "string",
+         "content": "The key to get the product name, such as _iPad8,12_. Requires the Device Information access right.",
+         "os": {
+          "iOS": {},
+          "macOS": {},
+          "tvOS": {},
+          "visionOS": {},
+          "watchOS": {}
+         }
+        },
+        {
+         "key": "SerialNumber",
+         "type": "string",
+         "content": "The key to get the serial number. Requires the Device Information access right.",
+         "os": {
+          "iOS": {},
+          "macOS": {},
+          "tvOS": {},
+          "visionOS": {},
+          "watchOS": {}
+         }
+        },
+        {
+         "key": "DeviceCapacity",
+         "type": "string",
+         "content": "The key to get the device's total capacity. Requires the Device Information access right.",
+         "os": {
+          "iOS": {},
+          "macOS": {},
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {},
+          "watchOS": {}
+         }
+        },
+        {
+         "key": "AvailableDeviceCapacity",
+         "type": "string",
+         "content": "The key to get the available capacity. Requires the Device Information access right.",
+         "os": {
+          "iOS": {},
+          "macOS": {},
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {},
+          "watchOS": {}
+         }
+        },
+        {
+         "key": "IMEI",
+         "type": "string",
+         "content": "The key to get the International Mobile Equipment Identity (IMEI) number. Requires the Device Information access right. Available as of iOS 4 and deprecated in iOS 16.",
+         "os": {
+          "iOS": {
+           "deprecated": "16.0",
+           "removed": "26.0"
+          },
+          "macOS": {
+           "introduced": "n/a"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "MEID",
+         "type": "string",
+         "content": "The key to get the mobile equipment ID (MEID). Requires the Device Information access right. Available as of iOS 4 and deprecated in iOS 16.",
+         "os": {
+          "iOS": {
+           "deprecated": "16.0",
+           "removed": "26.0"
+          },
+          "macOS": {
+           "introduced": "n/a"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "ModemFirmwareVersion",
+         "type": "string",
+         "content": "The key to get the modem firmware version. Requires the Device Information access right.",
+         "os": {
+          "iOS": {},
+          "macOS": {
+           "introduced": "n/a"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "CellularTechnology",
+         "type": "string",
+         "content": "The key to get the cellular technology type. Requires the Device Information access right.",
+         "os": {
+          "iOS": {
+           "introduced": "4.2.6"
+          },
+          "macOS": {
+           "introduced": "n/a"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "BatteryLevel",
+         "type": "string",
+         "content": "The key to get the battery level. Requires the Device Information access right.",
+         "os": {
+          "iOS": {
+           "introduced": "5.0"
+          },
+          "macOS": {
+           "introduced": "13.3"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {},
+          "watchOS": {}
+         }
+        },
+        {
+         "key": "HasBattery",
+         "type": "string",
+         "content": "The key to determine whether the device has an internal battery.",
+         "os": {
+          "iOS": {
+           "introduced": "n/a"
+          },
+          "macOS": {
+           "introduced": "13.3"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "IsSupervised",
+         "type": "string",
+         "content": "The key to determine whether the device is supervised. Requires the Device Information access right.",
+         "os": {
+          "iOS": {
+           "introduced": "6.0"
+          },
+          "macOS": {
+           "introduced": "10.15"
+          },
+          "tvOS": {
+           "introduced": "9.0"
+          },
+          "visionOS": {},
+          "watchOS": {}
+         }
+        },
+        {
+         "key": "IsMultiUser",
+         "type": "string",
+         "content": "The key to determine whether the device is a Shared iPad. Requires the Device Information access right.",
+         "os": {
+          "iOS": {
+           "introduced": "9.3"
+          },
+          "macOS": {
+           "introduced": "n/a"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "IsDeviceLocatorServiceEnabled",
+         "type": "string",
+         "content": "The key to determine whether the system enabled a device locator service such as Find My on the device. Requires the Device Information access right.",
+         "os": {
+          "iOS": {
+           "introduced": "7.0"
+          },
+          "macOS": {
+           "introduced": "n/a"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {},
+          "watchOS": {}
+         }
+        },
+        {
+         "key": "IsActivationLockEnabled",
+         "type": "string",
+         "content": "The key to determine whether the system enabled Activation Lock on the device. Requires the Device Information access right. Available as of iOS 7 and macOS 10.15, and deprecated in iOS 16 and macOS 13.",
+         "os": {
+          "iOS": {
+           "introduced": "7.0",
+           "deprecated": "16.0"
+          },
+          "macOS": {
+           "introduced": "10.15",
+           "deprecated": "13.0"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "deprecated": "10.0"
+          }
+         }
+        },
+        {
+         "key": "IsActivationLockSupported",
+         "type": "string",
+         "content": "The key to determine whether the device supports Activation Lock. Also see `IsActivationLockManageable` in `ManagementStatus`.",
+         "os": {
+          "iOS": {
+           "introduced": "n/a"
+          },
+          "macOS": {
+           "introduced": "10.15"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "IsDoNotDisturbInEffect",
+         "type": "string",
+         "content": "The key to determine whether the device is in Do Not Disturb (DND) mode. Requires the Device Information access right.",
+         "os": {
+          "iOS": {
+           "introduced": "7.0"
+          },
+          "macOS": {
+           "introduced": "n/a"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {},
+          "watchOS": {}
+         }
+        },
+        {
+         "key": "DeviceID",
+         "type": "string",
+         "content": "The key to get the device ID. Requires the Device Information access right.",
+         "os": {
+          "iOS": {
+           "introduced": "n/a"
+          },
+          "macOS": {
+           "introduced": "n/a"
+          },
+          "tvOS": {
+           "introduced": "9.0"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "EASDeviceIdentifier",
+         "type": "string",
+         "content": "The key to get the device identifier for Exchange ActiveSync (EAS). Requires the Device Information access right.",
+         "os": {
+          "iOS": {
+           "introduced": "7.0"
+          },
+          "macOS": {
+           "introduced": "n/a"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {},
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "IsCloudBackupEnabled",
+         "type": "string",
+         "content": "The key to determine whether the system enabled iCloud Backup on the device. Requires the Device Information access right.",
+         "os": {
+          "iOS": {
+           "introduced": "7.1"
+          },
+          "macOS": {
+           "introduced": "n/a"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {},
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "ActiveManagedUsers",
+         "type": "string",
+         "content": "The key to get an array of directory GUIDs for logged-in managed users. Requires the Device Information access right.",
+         "os": {
+          "iOS": {
+           "introduced": "n/a"
+          },
+          "macOS": {
+           "introduced": "10.11"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "OSUpdateSettings",
+         "type": "string",
+         "content": "The key to get the contents of `OSUpdateSettings`. Requires the Device Information access right.",
+         "os": {
+          "iOS": {
+           "introduced": "n/a"
+          },
+          "macOS": {
+           "introduced": "10.11",
+           "deprecated": "26.0",
+           "removed": "27.0"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "LocalHostName",
+         "type": "string",
+         "content": "The key to get the local hostname from Bonjour.",
+         "os": {
+          "iOS": {
+           "introduced": "n/a"
+          },
+          "macOS": {
+           "introduced": "10.11"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "HostName",
+         "type": "string",
+         "content": "The key to get the hostname.",
+         "os": {
+          "iOS": {
+           "introduced": "n/a"
+          },
+          "macOS": {
+           "introduced": "10.11"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "AutoSetupAdminAccounts",
+         "type": "string",
+         "content": "The key to get the contents of `AutoSetupAdminAccountsItem`, which Setup Assistant automatically creates during enrollment. Requires the Device Information access right.",
+         "os": {
+          "iOS": {
+           "introduced": "n/a"
+          },
+          "macOS": {
+           "introduced": "10.11",
+           "requires_dep": true
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "SystemIntegrityProtectionEnabled",
+         "type": "string",
+         "content": "The key to determine whether the system enabled System Integrity Protection on the device. Requires the Device Information access right, and is available in macOS 10.12 and later.",
+         "os": {
+          "iOS": {
+           "introduced": "n/a"
+          },
+          "macOS": {
+           "introduced": "10.12"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "SupportsLOMDevice",
+         "type": "string",
+         "content": "The key to determine whether the device can receive `PowerON`, `PowerOFF`, and `Reset` commands from a lights-out management (LOM) controller.",
+         "os": {
+          "iOS": {
+           "introduced": "n/a"
+          },
+          "macOS": {
+           "introduced": "11.0"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "IsMDMLostModeEnabled",
+         "type": "string",
+         "content": "The key to determine whether the system enabled Managed Lost Mode on the device. Requires the Device Information access right.",
+         "os": {
+          "iOS": {
+           "introduced": "9.3"
+          },
+          "macOS": {
+           "introduced": "n/a"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {}
+         }
+        },
+        {
+         "key": "MaximumResidentUsers",
+         "type": "string",
+         "content": "The key to get the maximum number of users that can use this Shared iPad device. In iOS 13.4 and later, this value is always `32`. Requires the Device Information access right.",
+         "os": {
+          "iOS": {
+           "introduced": "9.3",
+           "supervised": true,
+           "requires_dep": true
+          },
+          "macOS": {
+           "introduced": "n/a"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "EstimatedResidentUsers",
+         "type": "string",
+         "content": "The key to get the estimated number of users that can use this Shared iPad device, according to the available space of the device and each user's quota. Requires the Device Information access right.",
+         "os": {
+          "iOS": {
+           "introduced": "14.0",
+           "supervised": true,
+           "requires_dep": true
+          },
+          "macOS": {
+           "introduced": "n/a"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "QuotaSize",
+         "type": "string",
+         "content": "The key to get the quota size for each user on this Shared iPad device. Requires the Device Information access right.",
+         "os": {
+          "iOS": {
+           "introduced": "13.4",
+           "supervised": true,
+           "requires_dep": true
+          },
+          "macOS": {
+           "introduced": "n/a"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "ResidentUsers",
+         "type": "string",
+         "content": "The key to get the number of users currently on this Shared iPad device. Requires the Device Information access right.",
+         "os": {
+          "iOS": {
+           "introduced": "13.4",
+           "supervised": true,
+           "requires_dep": true
+          },
+          "macOS": {
+           "introduced": "n/a"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "UserSessionTimeout",
+         "type": "string",
+         "content": "The key to get the timeout interval for the user session.",
+         "os": {
+          "iOS": {
+           "introduced": "14.5",
+           "supervised": true,
+           "requires_dep": true
+          },
+          "macOS": {
+           "introduced": "n/a"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "TemporarySessionTimeout",
+         "type": "string",
+         "content": "The key to get the timeout interval for the temporary session.",
+         "os": {
+          "iOS": {
+           "introduced": "14.5",
+           "supervised": true,
+           "requires_dep": true
+          },
+          "macOS": {
+           "introduced": "n/a"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "TemporarySessionOnly",
+         "type": "string",
+         "content": "The key to determine whether the device allows only temporary sessions.",
+         "os": {
+          "iOS": {
+           "introduced": "14.5",
+           "supervised": true,
+           "requires_dep": true
+          },
+          "macOS": {
+           "introduced": "n/a"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "ManagedAppleIDDefaultDomains",
+         "type": "string",
+         "content": "The key to get the list of domains that the device suggests on the Shared iPad login screen.",
+         "os": {
+          "iOS": {
+           "introduced": "16.0",
+           "supervised": true,
+           "requires_dep": true
+          },
+          "macOS": {
+           "introduced": "n/a"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "OnlineAuthenticationGracePeriod",
+         "type": "string",
+         "content": "The key to get the grace period for Shared iPad online authentication (in days).",
+         "os": {
+          "iOS": {
+           "introduced": "16.0",
+           "supervised": true,
+           "requires_dep": true
+          },
+          "macOS": {
+           "introduced": "n/a"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "SkipLanguageAndLocaleSetupForNewUsers",
+         "type": "string",
+         "content": "The key to determine whether the system skips the language and country/region panes for new users on Shared iPad.",
+         "os": {
+          "iOS": {
+           "introduced": "16.2",
+           "supervised": true,
+           "requires_dep": true
+          },
+          "macOS": {
+           "introduced": "n/a"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "PushToken",
+         "type": "string",
+         "content": "The key to get the push token for the current user-channel connection. The MDM server ignores this query for the device channel. Requires the Device Information access right.",
+         "os": {
+          "iOS": {
+           "introduced": "9.3"
+          },
+          "macOS": {
+           "introduced": "10.12"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "DiagnosticSubmissionEnabled",
+         "type": "string",
+         "content": "The key to determine whether the system enabled the diagnostic submission setting on the device. Requires the Device Information access right.",
+         "os": {
+          "iOS": {
+           "introduced": "9.3"
+          },
+          "macOS": {
+           "introduced": "n/a"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {},
+          "watchOS": {}
+         }
+        },
+        {
+         "key": "AppAnalyticsEnabled",
+         "type": "string",
+         "content": "The key to determine whether the device is sharing app analytics. Requires the Device Information access right.",
+         "os": {
+          "iOS": {
+           "introduced": "9.3"
+          },
+          "macOS": {
+           "introduced": "n/a"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {},
+          "watchOS": {}
+         }
+        },
+        {
+         "key": "TimeZone",
+         "type": "string",
+         "content": "The key to get the current Internet Assigned Numbers Authority (IANA) time zone database name. Requires the Device Information access right.",
+         "os": {
+          "iOS": {
+           "introduced": "14.0"
+          },
+          "macOS": {
+           "introduced": "26.0"
+          },
+          "tvOS": {
+           "introduced": "14.0"
+          },
+          "visionOS": {
+           "introduced": "2.0"
+          },
+          "watchOS": {}
+         }
+        },
+        {
+         "key": "ICCID",
+         "type": "string",
+         "content": "The key to get the integrated circuit card (ICC) identifier for the installed SIM card. Requires the Network Information access right. Available as of iOS 4 and deprecated in iOS 16.",
+         "os": {
+          "iOS": {
+           "deprecated": "16.0",
+           "removed": "26.0"
+          },
+          "macOS": {
+           "introduced": "n/a"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "BluetoothMAC",
+         "type": "string",
+         "content": "The key to get the Bluetooth media access control (MAC) address. Requires the Network Information access right.",
+         "os": {
+          "iOS": {},
+          "macOS": {},
+          "tvOS": {},
+          "visionOS": {},
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "WiFiMAC",
+         "type": "string",
+         "content": "The key to get the Wi-Fi MAC address. Requires the Network Information access right.",
+         "os": {
+          "iOS": {},
+          "macOS": {},
+          "tvOS": {},
+          "visionOS": {},
+          "watchOS": {}
+         }
+        },
+        {
+         "key": "EthernetMAC",
+         "type": "string",
+         "content": "The key to get the primary Ethernet MAC address. Requires the Network Information access right.",
+         "os": {
+          "iOS": {
+           "introduced": "n/a"
+          },
+          "macOS": {},
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "CurrentCarrierNetwork",
+         "type": "string",
+         "content": "The key to get the name of the current carrier network. Requires the Network Information access right. Available as of iOS 4 and deprecated in iOS 16.",
+         "os": {
+          "iOS": {
+           "deprecated": "16.0",
+           "removed": "26.0"
+          },
+          "macOS": {
+           "introduced": "n/a"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "SIMCarrierNetwork",
+         "type": "string",
+         "content": "Apple no longer supports this query. Use `SubscriberCarrierNetwork` instead.",
+         "os": {
+          "iOS": {
+           "removed": "5.0"
+          },
+          "macOS": {
+           "introduced": "n/a"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "SubscriberCarrierNetwork",
+         "type": "string",
+         "content": "The key to get the home carrier network. Requires the Network Information access right. Available as of iOS 5 and deprecated in iOS 16.",
+         "os": {
+          "iOS": {
+           "introduced": "5.0",
+           "deprecated": "16.0",
+           "removed": "26.0"
+          },
+          "macOS": {
+           "introduced": "n/a"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "CarrierSettingsVersion",
+         "type": "string",
+         "content": "The key to get the version of the carrier settings. Requires the Network Information access right. Available as of iOS 4 and deprecated in iOS 16.",
+         "os": {
+          "iOS": {
+           "deprecated": "16.0",
+           "removed": "26.0"
+          },
+          "macOS": {
+           "introduced": "n/a"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "PhoneNumber",
+         "type": "string",
+         "content": "The key to get the raw phone number, without punctuation, and including the country code. Requires the Network Information access right. Available as of iOS 4 and deprecated in iOS 16.",
+         "os": {
+          "iOS": {
+           "deprecated": "16.0",
+           "removed": "26.0"
+          },
+          "macOS": {
+           "introduced": "n/a"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "DataRoamingEnabled",
+         "type": "string",
+         "content": "The key to determine whether the system enabled data roaming on the device. Requires the Network Information access right.",
+         "os": {
+          "iOS": {
+           "introduced": "5.0"
+          },
+          "macOS": {
+           "introduced": "n/a"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "VoiceRoamingEnabled",
+         "type": "string",
+         "content": "The key to determine whether the system enabled voice roaming on the device, which isn't available for all carriers. Requires the Network Information access right. Available as of iOS 5 and deprecated in iOS 16.",
+         "os": {
+          "iOS": {
+           "introduced": "5.0",
+           "deprecated": "16.0",
+           "removed": "26.0"
+          },
+          "macOS": {
+           "introduced": "n/a"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "PersonalHotspotEnabled",
+         "type": "string",
+         "content": "The key to determine whether the system enabled Personal Hotspot on the device, which isn't available for all carriers. Requires the Network Information access right.",
+         "os": {
+          "iOS": {
+           "introduced": "7.0"
+          },
+          "macOS": {
+           "introduced": "n/a"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "IsNetworkTethered",
+         "type": "string",
+         "content": "The key to determine whether the device is network-tethered. Requires the Network Information access right.",
+         "os": {
+          "iOS": {
+           "introduced": "10.3"
+          },
+          "macOS": {
+           "introduced": "n/a"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "IsRoaming",
+         "type": "string",
+         "content": "The key to determine whether the device is roaming. Requires the Network Information access right.",
+         "os": {
+          "iOS": {
+           "introduced": "4.2",
+           "deprecated": "16.0",
+           "removed": "26.0"
+          },
+          "macOS": {
+           "introduced": "n/a"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "SubscriberMCC",
+         "type": "string",
+         "content": "The key to get the home mobile country code. Requires the Network Information access right. Available as of iOS 4.2.6 and deprecated in iOS 16.",
+         "os": {
+          "iOS": {
+           "introduced": "4.2.6",
+           "deprecated": "16.0",
+           "removed": "26.0"
+          },
+          "macOS": {
+           "introduced": "n/a"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "SubscriberMNC",
+         "type": "string",
+         "content": "The key to get the home mobile network code. Requires the Network Information access right. Available as of iOS 4.2.6 and deprecated in iOS 16.",
+         "os": {
+          "iOS": {
+           "introduced": "4.2.6",
+           "deprecated": "16.0",
+           "removed": "26.0"
+          },
+          "macOS": {
+           "introduced": "n/a"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "CurrentMCC",
+         "type": "string",
+         "content": "The key to get the current mobile country code (MCC). Requires the Network Information access right. It's available as of iOS 4 and deprecated in iOS 16.",
+         "os": {
+          "iOS": {
+           "deprecated": "16.0",
+           "removed": "26.0"
+          },
+          "macOS": {
+           "introduced": "n/a"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "CurrentMNC",
+         "type": "string",
+         "content": "The key to get the current mobile network code (MNC). Requires the Network Information access right. Available as of iOS 4 and deprecated in iOS 16.",
+         "os": {
+          "iOS": {
+           "deprecated": "16.0",
+           "removed": "26.0"
+          },
+          "macOS": {
+           "introduced": "n/a"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "ServiceSubscriptions",
+         "type": "string",
+         "content": "The key to get the contents of `ServiceSubscriptionProperty`. Requires the Network Information access right.",
+         "os": {
+          "iOS": {
+           "introduced": "12.0"
+          },
+          "macOS": {
+           "introduced": "n/a"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "PINRequiredForEraseDevice",
+         "type": "string",
+         "content": "The key to determine whether the `EraseDeviceCommand` requires a PIN.",
+         "os": {
+          "iOS": {
+           "introduced": "n/a"
+          },
+          "macOS": {
+           "introduced": "11.0"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "PINRequiredForDeviceLock",
+         "type": "string",
+         "content": "The key to determine whether the `DeviceLockCommand` requires a PIN.",
+         "os": {
+          "iOS": {
+           "introduced": "n/a"
+          },
+          "macOS": {
+           "introduced": "11.0"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "SupportsiOSAppInstalls",
+         "type": "string",
+         "content": "The key to determine whether the macOS device supports iOS or iPadOS app installs.",
+         "os": {
+          "iOS": {
+           "introduced": "n/a"
+          },
+          "macOS": {
+           "introduced": "11.0"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "SoftwareUpdateDeviceID",
+         "type": "string",
+         "content": "The key to get the device identifier to look up available OS updates through [https://gdmf.apple.com/v2/pmv](https://gdmf.apple.com/v2/pmv).\n\nRemoved: subscribe to the declarative management `softwareupdate.device-id` status item.",
+         "os": {
+          "iOS": {
+           "introduced": "15.0",
+           "deprecated": "26.0",
+           "removed": "27.0"
+          },
+          "macOS": {
+           "introduced": "12.0",
+           "deprecated": "26.0",
+           "removed": "27.0"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "deprecated": "26.0",
+           "removed": "27.0"
+          },
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "SoftwareUpdateSettings",
+         "type": "string",
+         "content": "The key to get the device settings that control which updates appear in the Software Update pane in Settings.\n\nRemoved: use the declarative management `com.apple.configuration.softwareupdate.settings` configuration to set values.",
+         "os": {
+          "iOS": {
+           "introduced": "14.5",
+           "deprecated": "26.0",
+           "removed": "27.0"
+          },
+          "macOS": {
+           "introduced": "n/a"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "AccessibilitySettings",
+         "type": "string",
+         "content": "The key to get the current state of settable accessibility settings.",
+         "os": {
+          "iOS": {
+           "introduced": "16.0",
+           "supervised": true
+          },
+          "macOS": {
+           "introduced": "n/a"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "supervised": true
+          }
+         }
+        },
+        {
+         "key": "DevicePropertiesAttestation",
+         "type": "string",
+         "content": "The key to get an attestation of the device's properties. See the hardware requirements for attestation below.",
+         "os": {
+          "iOS": {
+           "introduced": "16.0"
+          },
+          "macOS": {
+           "introduced": "14.0"
+          },
+          "tvOS": {
+           "introduced": "16.0"
+          },
+          "visionOS": {}
+         }
+        },
+        {
+         "key": "EACSPreflight",
+         "type": "string",
+         "content": "The key to determine whether the device can perform an `EraseDeviceCommand` using Erase All Content and Settings (EACS).",
+         "os": {
+          "iOS": {
+           "introduced": "n/a"
+          },
+          "macOS": {
+           "introduced": "13.3"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "key": "DeviceAttestationNonce",
+     "type": "data",
+     "content": "A freshness code that appears in the resulting attestation. This value can contain up to 32 bytes of data. If specified, queries need to contain `DevicePropertiesAttestation`.\n\nThe MDM server uses this value to prove that an attestation was recently generated. The system caches the most recently generated attestation on the device. If omitted or if the value matches the cached attestation, the system returns the cached attestation. To request a new attestation, provide a new freshness code. Requests for new attestations are rate limited. If it's fewer than 7 days since the system generated an attestation, the device returns the cached attestation rather than generating a new one.\n\nSee the hardware requirements for attestation below.",
+     "os": {
+      "iOS": {
+       "introduced": "16.0"
+      },
+      "macOS": {
+       "introduced": "14.0"
+      },
+      "tvOS": {
+       "introduced": "16.0"
+      },
+      "visionOS": {}
+     }
+    }
+   ]
+  },
+  {
+   "request_type": "DeviceLocation",
+   "title": "Device Location Command",
+   "description": "Request the location of a device when in Lost Mode.",
+   "os": {
+    "iOS": {
+     "introduced": "9.3",
+     "supervised": true
+    },
+    "macOS": {
+     "introduced": "n/a"
+    },
+    "tvOS": {
+     "introduced": "n/a"
+    },
+    "visionOS": {
+     "introduced": "n/a"
+    },
+    "watchOS": {
+     "introduced": "n/a"
+    }
+   }
+  },
+  {
+   "request_type": "DeviceLock",
+   "title": "Device Lock Command",
+   "description": "Remotely and immediately lock a device.",
+   "content": "This command allows the server to immediately lock the device. This command requires the Device Lock and Passcode Removal right.",
+   "os": {
+    "iOS": {
+     "introduced": "4.0"
+    },
+    "macOS": {
+     "introduced": "10.7"
+    },
+    "tvOS": {
+     "introduced": "n/a"
+    },
+    "visionOS": {
+     "introduced": "2.0"
+    },
+    "watchOS": {
+     "introduced": "10.0"
+    }
+   },
+   "keys": [
+    {
+     "key": "Message",
+     "type": "string",
+     "content": "The message to display on the Lock Screen of the device. This value doesn't apply to a Shared iPad device.",
+     "os": {
+      "iOS": {
+       "introduced": "7.0"
+      },
+      "macOS": {
+       "introduced": "10.14"
+      },
+      "visionOS": {
+       "introduced": "n/a"
+      }
+     }
+    },
+    {
+     "key": "PhoneNumber",
+     "type": "string",
+     "content": "The phone number to display on the Lock Screen. This value doesn't apply to a Shared iPad device. This value is available for a Mac with Apple silicon only.",
+     "os": {
+      "iOS": {
+       "introduced": "7.0"
+      },
+      "macOS": {
+       "introduced": "11.5"
+      },
+      "visionOS": {
+       "introduced": "n/a"
+      }
+     }
+    },
+    {
+     "key": "PIN",
+     "type": "string",
+     "content": "The six-character PIN for Find My.",
+     "os": {
+      "iOS": {
+       "introduced": "n/a"
+      },
+      "macOS": {
+       "introduced": "10.8"
+      },
+      "visionOS": {
+       "introduced": "n/a"
+      },
+      "watchOS": {
+       "introduced": "n/a"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "request_type": "DisableLostMode",
+   "title": "Disable Lost Mode Command",
+   "description": "Take the device out of Lost Mode.",
+   "content": "This command allows the server to take the device out of MDM lost mode.",
+   "os": {
+    "iOS": {
+     "introduced": "9.3",
+     "supervised": true
+    },
+    "macOS": {
+     "introduced": "n/a"
+    },
+    "tvOS": {
+     "introduced": "n/a"
+    },
+    "visionOS": {
+     "introduced": "n/a"
+    },
+    "watchOS": {
+     "introduced": "n/a"
+    }
+   }
+  },
+  {
+   "request_type": "DisableRemoteDesktop",
+   "title": "Disable Remote Desktop Command",
+   "description": "Disable Remote Desktop on a device.",
+   "content": "Disable Remote Desktop.",
+   "os": {
+    "iOS": {
+     "introduced": "n/a"
+    },
+    "macOS": {
+     "introduced": "10.14.4",
+     "supervised": true
+    },
+    "tvOS": {
+     "introduced": "n/a"
+    },
+    "visionOS": {
+     "introduced": "n/a"
+    },
+    "watchOS": {
+     "introduced": "n/a"
+    }
+   }
+  },
+  {
+   "request_type": "EnableLostMode",
+   "title": "Enable Lost Mode Command",
+   "description": "Enable Lost Mode on a device, which provides a message and phone number on the Lock Screen.",
+   "content": "This command allows the server to put the device in MDM lost mode, with a message, phone number, and footnote text. A message or phone number must be provided.",
+   "os": {
+    "iOS": {
+     "introduced": "9.3",
+     "supervised": true
+    },
+    "macOS": {
+     "introduced": "n/a"
+    },
+    "tvOS": {
+     "introduced": "n/a"
+    },
+    "visionOS": {
+     "introduced": "n/a"
+    },
+    "watchOS": {
+     "introduced": "n/a"
+    }
+   },
+   "keys": [
+    {
+     "key": "Message",
+     "type": "string",
+     "content": "If present, the device displays this text on the Lock Screen. You must provide this value if you don't provide a value for `PhoneNumber`."
+    },
+    {
+     "key": "PhoneNumber",
+     "type": "string",
+     "content": "If present, the device displays this phone number on the Lock Screen. You must provide this value if you don't provide a value for `Message`."
+    },
+    {
+     "key": "Footnote",
+     "type": "string",
+     "content": "If present, the device displays this text at the bottom of the Lock Screen."
+    }
+   ]
+  },
+  {
+   "request_type": "EnableRemoteDesktop",
+   "title": "Enable Remote Desktop Command",
+   "description": "Enable Remote Desktop on a device.",
+   "content": "Enable Remote Desktop.",
+   "os": {
+    "iOS": {
+     "introduced": "n/a"
+    },
+    "macOS": {
+     "introduced": "10.14.4",
+     "supervised": true
+    },
+    "tvOS": {
+     "introduced": "n/a"
+    },
+    "visionOS": {
+     "introduced": "n/a"
+    },
+    "watchOS": {
+     "introduced": "n/a"
+    }
+   }
+  },
+  {
+   "request_type": "EraseDevice",
+   "title": "Erase Device Command",
+   "description": "Remotely and immediately erase a device.",
+   "content": "This command allows the server to remotely erase the device. This command requires the Device Erase right.",
+   "os": {
+    "iOS": {
+     "introduced": "4.0"
+    },
+    "macOS": {
+     "introduced": "10.7"
+    },
+    "tvOS": {
+     "introduced": "10.2"
+    },
+    "visionOS": {
+     "introduced": "1.1"
+    },
+    "watchOS": {
+     "introduced": "10.0"
+    }
+   },
+   "keys": [
+    {
+     "key": "PreserveDataPlan",
+     "type": "boolean",
+     "default": false,
+     "content": "If `true`, preserve the data plan on an iPhone or iPad with eSIM functionality, if one exists.",
+     "os": {
+      "iOS": {
+       "introduced": "11.0"
+      },
+      "macOS": {
+       "introduced": "n/a"
+      },
+      "tvOS": {
+       "introduced": "n/a"
+      },
+      "visionOS": {
+       "introduced": "n/a"
+      }
+     }
+    },
+    {
+     "key": "DisallowProximitySetup",
+     "type": "boolean",
+     "default": false,
+     "content": "If `true`, disable Proximity Setup on the next reboot and skip the pane in Setup Assistant. Prior to iOS 14, don't use this option with any other option.",
+     "os": {
+      "iOS": {
+       "introduced": "11.3"
+      },
+      "macOS": {
+       "introduced": "n/a"
+      },
+      "tvOS": {
+       "introduced": "n/a"
+      },
+      "visionOS": {
+       "introduced": "n/a"
+      },
+      "watchOS": {
+       "introduced": "n/a"
+      }
+     }
+    },
+    {
+     "key": "PIN",
+     "type": "string",
+     "content": "The six-character PIN for Find My.",
+     "os": {
+      "iOS": {
+       "introduced": "n/a"
+      },
+      "macOS": {
+       "introduced": "10.8"
+      },
+      "tvOS": {
+       "introduced": "n/a"
+      },
+      "visionOS": {
+       "introduced": "n/a"
+      },
+      "watchOS": {
+       "introduced": "n/a"
+      }
+     }
+    },
+    {
+     "key": "ObliterationBehavior",
+     "type": "string",
+     "allowed": [
+      "Default",
+      "DoNotObliterate",
+      "ObliterateWithWarning",
+      "Always"
+     ],
+     "content": "This key defines the fallback behavior for erasing a device.\n\nIn macOS 12 and later, this command uses Erase All Content and Settings (EACS) on Mac computers with the Apple M1 chip or the Apple T2 Security Chip. On those devices, if EACS can't run, the device can use obliteration (macOS 11.x behavior). This key has no effect on machines prior to the T2 chip. For a list of supported macs, see [Mac models with the Apple T2 Security Chip](https://support.apple.com/en-us/HT208862).\n\nUpon receiving this command, the device performs preflight checks to determine if the device is in a state that allows EACS. The `status` of the `EraseDeviceResponse` is either `Acknowledged` or `Error`.\n\nThe following values define the device's fallback behavior:\n\n- `DoNotObliterate`: If EACS preflight fails, the device responds to the server with an `Error` status and doesn't attempt to erase itself.\n  If EACS preflight succeeds, but EACS fails, the device doesn't attempt to erase itself.\n- `ObliterateWithWarning`: If EACS preflight fails, the device responds with an `Acknowledged` status and then attempts to erase itself.\n    If EACS preflight succeeds, but EACS fails, the device attempts to erase itself.\n- `Always`: The system doesn't attempt EACS. T2 and later devices always obliterate.\n- `Default`: If EACS preflight fails, the device responds to the server with an `Error` status and then attempts to erase itself.\n  If EACS preflight succeeds, but EACS fails, the device attempts to erase itself.",
+     "os": {
+      "iOS": {
+       "introduced": "n/a"
+      },
+      "macOS": {
+       "introduced": "12.0"
+      },
+      "tvOS": {
+       "introduced": "n/a"
+      },
+      "visionOS": {
+       "introduced": "n/a"
+      },
+      "watchOS": {
+       "introduced": "n/a"
+      }
+     }
+    },
+    {
+     "key": "ReturnToService",
+     "type": "dictionary",
+     "content": "The configuration settings for return to service.",
+     "os": {
+      "iOS": {
+       "introduced": "17.0"
+      },
+      "macOS": {
+       "introduced": "n/a"
+      },
+      "tvOS": {
+       "introduced": "18.0"
+      },
+      "visionOS": {
+       "introduced": "26.0"
+      },
+      "watchOS": {
+       "introduced": "n/a"
+      }
+     },
+     "keys": [
+      {
+       "key": "Enabled",
+       "type": "boolean",
+       "required": true,
+       "content": "If `true`, the device tries to reenroll itself automatically after erasure. The user needs to deactivate all activation locks for this feature to work correctly."
+      },
+      {
+       "key": "WiFiProfileData",
+       "type": "data",
+       "content": "The Wi-Fi profile that installs after erasure when using return to service. This is required when the device doesn't have an Ethernet or cellular connection."
+      },
+      {
+       "key": "MDMProfileData",
+       "type": "data",
+       "content": "The MDM profile that installs after erasure when using return to service. This key is required for all unsupervised devices, as well as supervised devices that don't enroll with Automated Device Enrollment. If provided, the device uses this profile directly instead of fetching it from the server. For devices that enroll with Automated Device Enrollment, this key isn't necessary unless the cloud configuration profile of the device contains the `configuration-web-url` key.\n\nThe cloud configuration still downloads from Apple's servers when the profile contains this key, so the supervision identity, MDM removability, and other settings from the cloud configuration still apply. However, the device doesn't use the specified URL in the cloud configuration to fetch the MDM profile."
+      },
+      {
+       "key": "BootstrapToken",
+       "type": "data",
+       "content": "The bootstrap token the system uses to implement return to service with app preservation. Required when enabling return to service through the cloud configuration.",
+       "os": {
+        "iOS": {
+         "introduced": "26.0"
+        },
+        "macOS": {
+         "introduced": "n/a"
+        },
+        "tvOS": {
+         "introduced": "n/a"
+        },
+        "visionOS": {
+         "introduced": "26.0"
+        },
+        "watchOS": {
+         "introduced": "n/a"
+        }
+       }
+      },
+      {
+       "key": "ShouldRetryEnrollment",
+       "type": "boolean",
+       "default": false,
+       "content": "If `true`, the device retries service enrollment when the initial enrollment fails after erasure.",
+       "os": {
+        "iOS": {
+         "introduced": "27.0"
+        },
+        "macOS": {
+         "introduced": "n/a"
+        },
+        "tvOS": {
+         "introduced": "n/a"
+        },
+        "visionOS": {
+         "introduced": "n/a"
+        },
+        "watchOS": {
+         "introduced": "n/a"
+        }
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "request_type": "InstallApplication",
+   "title": "Install Application Command",
+   "description": "Install a third-party app on a device.",
+   "os": {
+    "iOS": {
+     "introduced": "5.0"
+    },
+    "macOS": {
+     "introduced": "10.9"
+    },
+    "tvOS": {
+     "introduced": "10.2"
+    },
+    "visionOS": {
+     "introduced": "1.1"
+    },
+    "watchOS": {
+     "introduced": "10.0"
+    }
+   },
+   "keys": [
+    {
+     "key": "iTunesStoreID",
+     "type": "integer",
+     "content": "The app's iTunes Store identifier."
+    },
+    {
+     "key": "Identifier",
+     "type": "string",
+     "content": "The app's bundle identifier.\n\n\u003e Important:\n\u003e For a watchOS app, the identifier needs to be the watch's bundle identifier, which differs from the main bundle identifier for the iPhone the watch pairs with. Obtain the watch's bundle identifier for an app with a watch bundle, in the `watchBundleId` key that's part of the Content Metadata query. For more information on this query, see `Getting app and book information (Legacy)`.",
+     "os": {
+      "iOS": {
+       "introduced": "7.0"
+      }
+     }
+    },
+    {
+     "key": "Options",
+     "type": "dictionary",
+     "content": "A dictionary that contains the app installation options.",
+     "os": {
+      "iOS": {
+       "introduced": "7.0"
+      }
+     },
+     "keys": [
+      {
+       "key": "PurchaseMethod",
+       "type": "integer",
+       "default": 0,
+       "allowed": [
+        0,
+        1
+       ],
+       "content": "The app's purchase type, which must be one of the following values:\n\n- `0`: Free apps and Legacy Volume Purchase Program (VPP) with a redemption code. This option is only available in iOS.\n- `1`: Volume Purchase Program (VPP) app assignment.\n\nSet this value to `1` to install first-party apps without user login to the iTunes Store, such as Mail or Safari, or to install an iOS app with user enrollment."
+      }
+     ]
+    },
+    {
+     "key": "ManifestURL",
+     "type": "string",
+     "content": "The URL of the app manifest, which needs to begin with `https:`. The server returns the manifest as a property list that uses the `ManifestURL` format.",
+     "os": {
+      "iOS": {
+       "introduced": "7.0"
+      }
+     }
+    },
+    {
+     "key": "ManagementFlags",
+     "type": "integer",
+     "allowed": [
+      1,
+      4,
+      5
+     ],
+     "content": "A bitwise OR of the management flags. The possible values are:\n\n- `1`: If `InstallAsManaged` is `true`, remove the app upon removal of the MDM profile.\n- `4`: Prevent backup of app data.\n- `5`: Both `1` and `4`.",
+     "os": {
+      "macOS": {
+       "introduced": "11.0"
+      }
+     }
+    },
+    {
+     "key": "Configuration",
+     "type": "dictionary",
+     "content": "A dictionary that contains the initial configuration of the app, if you choose to provide it.",
+     "os": {
+      "iOS": {
+       "introduced": "7.0"
+      },
+      "macOS": {
+       "introduced": "11.0"
+      }
+     },
+     "keys": [
+      {
+       "key": "ANY",
+       "type": "any",
+       "content": "An app configuration key."
+      }
+     ]
+    },
+    {
+     "key": "Attributes",
+     "type": "dictionary",
+     "content": "A dictionary that contains the initial attributes of the app, if you choose to provide it.",
+     "os": {
+      "iOS": {
+       "introduced": "7.0"
+      },
+      "macOS": {
+       "introduced": "n/a"
+      }
+     },
+     "keys": [
+      {
+       "key": "VPNUUID",
+       "type": "string",
+       "content": "A per-app VPN unique identifier for this app.",
+       "os": {
+        "tvOS": {
+         "introduced": "n/a"
+        }
+       }
+      },
+      {
+       "key": "ContentFilterUUID",
+       "type": "string",
+       "content": "The content filter UUID for this app.",
+       "os": {
+        "iOS": {
+         "introduced": "16.0"
+        },
+        "tvOS": {
+         "introduced": "n/a"
+        },
+        "watchOS": {
+         "introduced": "n/a"
+        }
+       }
+      },
+      {
+       "key": "DNSProxyUUID",
+       "type": "string",
+       "content": "The DNS proxy UUID for this app.",
+       "os": {
+        "iOS": {
+         "introduced": "16.0"
+        },
+        "tvOS": {
+         "introduced": "n/a"
+        },
+        "watchOS": {
+         "introduced": "n/a"
+        }
+       }
+      },
+      {
+       "key": "RelayUUID",
+       "type": "string",
+       "content": "The relay UUID for this app.",
+       "os": {
+        "iOS": {
+         "introduced": "17.0"
+        },
+        "tvOS": {
+         "introduced": "n/a"
+        },
+        "watchOS": {
+         "introduced": "n/a"
+        }
+       }
+      },
+      {
+       "key": "AssociatedDomains",
+       "type": "array",
+       "content": "An array that contains the associated domains to add to this app.",
+       "os": {
+        "iOS": {
+         "introduced": "13.0"
+        },
+        "tvOS": {
+         "introduced": "n/a"
+        }
+       },
+       "keys": [
+        {
+         "key": "AssociatedDomain",
+         "type": "string"
+        }
+       ]
+      },
+      {
+       "key": "AssociatedDomainsEnableDirectDownloads",
+       "type": "boolean",
+       "default": false,
+       "content": "If `true`, perform claimed site association verification directly at the domain instead of on Apple's servers. Only set this to `true` for domains that can't access the internet.",
+       "os": {
+        "iOS": {
+         "introduced": "14.0"
+        },
+        "tvOS": {
+         "introduced": "n/a"
+        }
+       }
+      },
+      {
+       "key": "Removable",
+       "type": "boolean",
+       "default": true,
+       "content": "If `false`, this app isn't removable while it's a managed app.",
+       "os": {
+        "iOS": {
+         "introduced": "14.0"
+        },
+        "tvOS": {
+         "introduced": "14.0"
+        }
+       }
+      },
+      {
+       "key": "TapToPayScreenLock",
+       "type": "boolean",
+       "default": false,
+       "content": "If `true`, Tap to Pay on iPhone requires users to use Face ID or a passcode to unlock their device after every transaction that requires a customer's card PIN. If `false`, the user can configure this setting on their device.",
+       "os": {
+        "iOS": {
+         "introduced": "16.4"
+        },
+        "tvOS": {
+         "introduced": "n/a"
+        },
+        "visionOS": {
+         "introduced": "n/a"
+        },
+        "watchOS": {
+         "introduced": "n/a"
+        }
+       }
+      },
+      {
+       "key": "CellularSliceUUID",
+       "type": "string",
+       "content": "The data network name (DNN) or app category. For DNN, the value is `DNN:name`, where `name` is the carrier-provided DNN name. For app category, the value is `AppCategory:category`, where `category` is a carrier-provided string like \"Enterprise1\".",
+       "os": {
+        "iOS": {
+         "introduced": "17.0"
+        },
+        "tvOS": {
+         "introduced": "n/a"
+        },
+        "visionOS": {
+         "introduced": "n/a"
+        },
+        "watchOS": {
+         "introduced": "n/a"
+        }
+       }
+      },
+      {
+       "key": "Hideable",
+       "type": "boolean",
+       "default": true,
+       "content": "If `false`, the system prevents the user from hiding the app. It doesn't affect the user's ability to leave it in the App Library, while removing it from the Home Screen.",
+       "os": {
+        "iOS": {
+         "introduced": "18.1"
+        },
+        "tvOS": {
+         "introduced": "n/a"
+        },
+        "visionOS": {
+         "introduced": "n/a"
+        },
+        "watchOS": {
+         "introduced": "n/a"
+        }
+       }
+      },
+      {
+       "key": "Lockable",
+       "type": "boolean",
+       "default": true,
+       "content": "If `false`, the system prevents the user from locking the app. This also prevents the user from hiding the app.",
+       "os": {
+        "iOS": {
+         "introduced": "18.1"
+        },
+        "tvOS": {
+         "introduced": "n/a"
+        },
+        "visionOS": {
+         "introduced": "n/a"
+        },
+        "watchOS": {
+         "introduced": "n/a"
+        }
+       }
+      }
+     ]
+    },
+    {
+     "key": "ChangeManagementState",
+     "type": "string",
+     "allowed": [
+      "Managed"
+     ],
+     "content": "The change management state. This value doesn't work with the user enrollment feature introduced in iOS 13, or any type of account driven enrollment. The only possible value is:\n\n* `Managed`: Take management of the app if the user installed it already and `InstallAsManaged` is `true`.",
+     "os": {
+      "iOS": {
+       "introduced": "9.0"
+      },
+      "macOS": {
+       "introduced": "11.0"
+      },
+      "visionOS": {}
+     }
+    },
+    {
+     "key": "InstallAsManaged",
+     "type": "boolean",
+     "default": false,
+     "content": "If `true`, install the app as a managed app. Otherwise, the system installs the app as unmanaged. If you reinstall a manged app and omit this value or set it to `false`, the app becomes unmanaged.\n\nFor manifest-based installs, if `true`, the system only considers apps installed in `/Applications` as managed. In macOS 11 through 13, the system requires that the `pkg` only contains a single signed app.",
+     "os": {
+      "iOS": {
+       "introduced": "n/a"
+      },
+      "macOS": {
+       "introduced": "11.0"
+      },
+      "tvOS": {
+       "introduced": "n/a"
+      },
+      "visionOS": {
+       "introduced": "n/a"
+      },
+      "watchOS": {
+       "introduced": "n/a"
+      }
+     }
+    },
+    {
+     "key": "iOSApp",
+     "type": "boolean",
+     "default": false,
+     "content": "If `true`, the app is an iOS app that can run on a Mac with Apple silicon in macOS 11 and later.",
+     "os": {
+      "iOS": {
+       "introduced": "n/a"
+      },
+      "macOS": {
+       "introduced": "11.0"
+      },
+      "tvOS": {
+       "introduced": "n/a"
+      },
+      "visionOS": {
+       "introduced": "n/a"
+      },
+      "watchOS": {
+       "introduced": "n/a"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "request_type": "InstallEnterpriseApplication",
+   "title": "Install Enterprise Application Command",
+   "description": "Install an enterprise app on a device.",
+   "os": {
+    "iOS": {
+     "introduced": "n/a"
+    },
+    "macOS": {
+     "introduced": "10.13.6"
+    },
+    "tvOS": {
+     "introduced": "n/a"
+    },
+    "visionOS": {
+     "introduced": "n/a"
+    },
+    "watchOS": {
+     "introduced": "n/a"
+    }
+   },
+   "keys": [
+    {
+     "key": "Manifest",
+     "type": "dictionary",
+     "content": "A dictionary that specifies where to download the app. This value uses the `ManifestURL` format.",
+     "keys": [
+      {
+       "key": "ANY",
+       "type": "any",
+       "content": "A dictionary that specifies where to download the app. This value uses the `ManifestURL` format."
+      }
+     ]
+    },
+    {
+     "key": "ManifestURL",
+     "type": "string",
+     "content": "The URL of the app manifest, which needs to begin with `https:`. The manifest is returned as a property list that uses the `ManifestURL` format."
+    },
+    {
+     "key": "ManifestURLPinningCerts",
+     "type": "array",
+     "content": "An array of DER-encoded certificates to pin the connection when fetching the `ManifestURL`.",
+     "keys": [
+      {
+       "key": "ManifestURLPinningCertsItem",
+       "type": "data",
+       "required": true,
+       "content": "A certificate in DER-encoded format."
+      }
+     ]
+    },
+    {
+     "key": "PinningRevocationCheckRequired",
+     "type": "boolean",
+     "default": false,
+     "content": "If `true`, certificate revocation checks require a positive response when using certificate pinning with `ManifestURLPinningCerts`."
+    },
+    {
+     "key": "InstallAsManaged",
+     "type": "boolean",
+     "default": false,
+     "content": "If `true`, install the app as a managed app. Otherwise, the system installs the app as unmanaged. If you reinstall a manged app and omit this value or set it to `false`, the app becomes unmanaged.\n\nFor manifest-based installs, if `true`, the system only considers apps installed in `/Applications` as managed. In macOS 11 through 13, the system requires that the `pkg` only contains a single signed app.",
+     "os": {
+      "macOS": {
+       "introduced": "11.0"
+      }
+     }
+    },
+    {
+     "key": "ManagementFlags",
+     "type": "integer",
+     "allowed": [
+      1
+     ],
+     "content": "The management flags. The possible values are:\n\n* `1`: If `InstallAsManaged` is `true`, remove the app upon removal of the MDM profile.",
+     "os": {
+      "macOS": {
+       "introduced": "11.0"
+      }
+     }
+    },
+    {
+     "key": "Configuration",
+     "type": "dictionary",
+     "content": "A dictionary that contains the initial configuration of the app, if you choose to provide it.",
+     "os": {
+      "macOS": {
+       "introduced": "11.0"
+      }
+     },
+     "keys": [
+      {
+       "key": "ANY",
+       "type": "any",
+       "content": "An app configuration."
+      }
+     ]
+    },
+    {
+     "key": "ChangeManagementState",
+     "type": "string",
+     "allowed": [
+      "Managed"
+     ],
+     "content": "The change management state. This value doesn't work with the user enrollments. The only possible value is:\n\n* `Managed`: Take management of the app if the user installed it already and `InstallAsManaged` is `true`.",
+     "os": {
+      "macOS": {
+       "introduced": "11.0"
+      }
+     }
+    },
+    {
+     "key": "iOSApp",
+     "type": "boolean",
+     "default": false,
+     "content": "If `true`, the app is an iOS app that can run on a Mac with Apple silicon in macOS 11 and later.",
+     "os": {
+      "iOS": {
+       "introduced": "n/a"
+      },
+      "macOS": {
+       "introduced": "11.0"
+      },
+      "tvOS": {
+       "introduced": "n/a"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "request_type": "InstallMedia",
+   "title": "Install Media Command",
+   "description": "Install a book on a device.",
+   "content": "This command allows the server to install a book on a device. If the book is already being managed, this command will update the book.",
+   "os": {
+    "iOS": {
+     "introduced": "8.0"
+    },
+    "macOS": {
+     "introduced": "10.9",
+     "deprecated": "11.0",
+     "removed": "11.0"
+    },
+    "tvOS": {
+     "introduced": "n/a"
+    },
+    "visionOS": {
+     "introduced": "n/a"
+    },
+    "watchOS": {
+     "introduced": "n/a"
+    }
+   },
+   "keys": [
+    {
+     "key": "iTunesStoreID",
+     "type": "integer",
+     "content": "The book's iTunes Store identifier."
+    },
+    {
+     "key": "MediaURL",
+     "type": "string",
+     "content": "The URL to retrieve the book.",
+     "os": {
+      "macOS": {
+       "introduced": "n/a"
+      }
+     }
+    },
+    {
+     "key": "MediaType",
+     "type": "string",
+     "required": true,
+     "allowed": [
+      "Book"
+     ],
+     "content": "The media type, which can only be `Book`."
+    },
+    {
+     "key": "PersistentID",
+     "type": "string",
+     "content": "The book's persistent identifier in reverse-DNS form; for example, `com.acme.manuals.training`.",
+     "os": {
+      "macOS": {
+       "introduced": "n/a"
+      }
+     }
+    },
+    {
+     "key": "Kind",
+     "type": "string",
+     "allowed": [
+      "pdf",
+      "epub",
+      "ibooks"
+     ],
+     "content": "The kind of the media, which can be one of the following values:\n\n- `pdf`: A PDF file\n- `epub`: An EPUB file in `gzip` format.\n- `ibooks`: An iBooks Author file in `gzip` format.\n\nIf you omit this value, its value is the file extension in the URL.",
+     "os": {
+      "macOS": {
+       "introduced": "n/a"
+      }
+     }
+    },
+    {
+     "key": "Version",
+     "type": "string",
+     "content": "The book's version number.",
+     "os": {
+      "macOS": {
+       "introduced": "n/a"
+      }
+     }
+    },
+    {
+     "key": "Author",
+     "type": "string",
+     "content": "The name of the book's author.",
+     "os": {
+      "macOS": {
+       "introduced": "n/a"
+      }
+     }
+    },
+    {
+     "key": "Title",
+     "type": "string",
+     "content": "The book's title.",
+     "os": {
+      "macOS": {
+       "introduced": "n/a"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "request_type": "InstallProfile",
+   "title": "Install Profile Command",
+   "description": "Install a configuration profile on a device.",
+   "content": "This command allows the host to install a configuration profile. The profile may be encrypted using any installed identity certificate. The profile may also be signed. This command requires the Profile Installation and Removal right. It's supported in the user channel.",
+   "os": {
+    "iOS": {
+     "introduced": "4.0"
+    },
+    "macOS": {
+     "introduced": "10.7"
+    },
+    "tvOS": {
+     "introduced": "9.0"
+    },
+    "visionOS": {
+     "introduced": "1.1"
+    },
+    "watchOS": {
+     "introduced": "10.0"
+    }
+   },
+   "keys": [
+    {
+     "key": "Payload",
+     "type": "data",
+     "required": true,
+     "content": "The profile to install, which you can encrypt using any identity certificate installed on the device. You can also sign the profile."
+    }
+   ]
+  },
+  {
+   "request_type": "InstallProvisioningProfile",
+   "title": "Install Provisioning Profile Command",
+   "description": "Install a provisioning profile on a device.",
+   "content": "This command allows the server to install a provisioning profile. No error occurs if the provisioning profile is already installed. This command requires the Provisioning Profile Installation and Removal right. On macOS, this command is for iOS and iPadOS style provisioning profiles only.",
+   "os": {
+    "iOS": {
+     "introduced": "4.0"
+    },
+    "macOS": {
+     "introduced": "11.0"
+    },
+    "tvOS": {
+     "introduced": "10.2"
+    },
+    "visionOS": {
+     "introduced": "1.1"
+    },
+    "watchOS": {
+     "introduced": "10.0"
+    }
+   },
+   "keys": [
+    {
+     "key": "ProvisioningProfile",
+     "type": "data",
+     "required": true,
+     "content": "The provisioning profile."
+    }
+   ]
+  },
+  {
+   "request_type": "InstalledApplicationList",
+   "title": "Installed Application List Command",
+   "description": "Get a list of the installed apps on a device.",
+   "os": {
+    "iOS": {
+     "introduced": "5.0"
+    },
+    "macOS": {
+     "introduced": "10.7"
+    },
+    "tvOS": {
+     "introduced": "10.2"
+    },
+    "visionOS": {
+     "introduced": "1.1"
+    },
+    "watchOS": {
+     "introduced": "10.0"
+    }
+   },
+   "keys": [
+    {
+     "key": "Identifiers",
+     "type": "array",
+     "content": "An array of app identifiers. Provide this value to limit the response to only include these apps.\n\n\u003e Important:\n\u003e For a watchOS app, the identifier needs to be the watch's bundle identifier, which differs from the main bundle identifier for the iPhone the watch pairs with. Obtain the watch's bundle identifier for an app with a watch bundle, in the `watchBundleId` key that's part of the Content Metadata query. For more information on this query, see `Getting app and book information (Legacy)`.",
+     "os": {
+      "iOS": {
+       "introduced": "7.0"
+      },
+      "macOS": {
+       "introduced": "10.15"
+      }
+     },
+     "keys": [
+      {
+       "key": "IdentifiersItem",
+       "type": "string"
+      }
+     ]
+    },
+    {
+     "key": "ManagedAppsOnly",
+     "type": "boolean",
+     "default": false,
+     "content": "If `true`, only get a list of managed apps, excluding ones that Declarative Device Management is managing.\n\n\u003e Note:\n\u003e If the enrollment type is a user enrollment, the system always considers this key as set to `true` and only returns managed apps, excluding ones that Declarative Device Management is managing.",
+     "os": {
+      "iOS": {
+       "introduced": "7.0"
+      },
+      "macOS": {
+       "introduced": "10.15"
+      }
+     }
+    },
+    {
+     "key": "Items",
+     "type": "array",
+     "content": "An array of strings that represent keys in `InstalledApplicationListItem`. If present, the response only contains the keys listed here, except `Identifier` is always included. If not present, the response contains all keys. Starting in iOS 26, macOS 26, tvOS 26, watchOS 26, and visionOS 26, if this key isn't present, the response omits values that are expensive to calculate.\n\n\u003e Tip:\n\u003e Only request the keys that you need, because some key values can take significant time and power to calculate on the device.",
+     "os": {
+      "iOS": {
+       "introduced": "14.0"
+      },
+      "macOS": {
+       "introduced": "n/a"
+      },
+      "tvOS": {
+       "introduced": "14.0"
+      }
+     },
+     "keys": [
+      {
+       "key": "ItemsItem",
+       "type": "string",
+       "allowed": [
+        "AdHocCodeSigned",
+        "AppStoreVendable",
+        "BetaApp",
+        "BundleSize",
+        "DeviceBasedVPP",
+        "DistributorIdentifier",
+        "DynamicSize",
+        "ExternalVersionIdentifier",
+        "HasUpdateAvailable",
+        "Identifier",
+        "Installing",
+        "IsAppClip",
+        "IsValidated",
+        "Name",
+        "ShortVersion",
+        "Version"
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "request_type": "InviteToProgram",
+   "title": "Invite To Program Command",
+   "description": "Invite a user to join the Volume Purchase Program (VPP).",
+   "os": {
+    "iOS": {
+     "introduced": "7.0"
+    },
+    "macOS": {
+     "introduced": "10.9"
+    },
+    "tvOS": {
+     "introduced": "n/a"
+    },
+    "visionOS": {
+     "introduced": "n/a"
+    },
+    "watchOS": {
+     "introduced": "n/a"
+    }
+   },
+   "keys": [
+    {
+     "key": "ProgramID",
+     "type": "string",
+     "required": true,
+     "allowed": [
+      "com.apple.cloudvpp"
+     ],
+     "content": "The program's identifier, which can only be `com.apple.cloudvpp`."
+    },
+    {
+     "key": "InvitationURL",
+     "type": "string",
+     "required": true,
+     "content": "The Volume Purchase Program (VPP) invitation URL."
+    }
+   ]
+  },
+  {
+   "request_type": "LOMDeviceRequest",
+   "title": "LOM Device Request Command",
+   "description": "Send requests to a device using lights-out management (LOM).",
+   "content": "Used to send LOM requests (\"PowerON\", \"PowerOFF\", \"Reset\") to LOM Controller which then forwards the request to LOM Devices.",
+   "os": {
+    "iOS": {
+     "introduced": "n/a"
+    },
+    "macOS": {
+     "introduced": "11.0"
+    },
+    "tvOS": {
+     "introduced": "n/a"
+    },
+    "visionOS": {
+     "introduced": "n/a"
+    },
+    "watchOS": {
+     "introduced": "n/a"
+    }
+   },
+   "keys": [
+    {
+     "key": "RequestList",
+     "type": "array",
+     "required": true,
+     "content": "An array of requests to perform.",
+     "keys": [
+      {
+       "key": "RequestListItem",
+       "type": "dictionary",
+       "required": true,
+       "content": "A dictionary that contains a requested action to perform on a device using lights-out management (LOM).",
+       "keys": [
+        {
+         "key": "DeviceRequestType",
+         "type": "string",
+         "required": true,
+         "allowed": [
+          "PowerON",
+          "PowerOFF",
+          "Reset"
+         ],
+         "content": "The requested action to perform on the device."
+        },
+        {
+         "key": "DeviceRequestUUID",
+         "type": "string",
+         "required": true,
+         "content": "The unique identifier of the request."
+        },
+        {
+         "key": "DeviceDNSName",
+         "type": "string",
+         "required": true,
+         "content": "The DNS name of the device. This should match the `dNSName` in `SubjectAltName` or an equivalent in a PKCS12 identity."
+        },
+        {
+         "key": "PrimaryIPv6AddressList",
+         "type": "array",
+         "required": true,
+         "content": "An array that contains the IPv6 addresses for primary LOM-compatible Ethernet interfaces for the device.",
+         "keys": [
+          {
+           "key": "PrimaryIPv6AddressListItem",
+           "type": "string",
+           "required": true
+          }
+         ]
+        },
+        {
+         "key": "SecondaryIPv6AddressList",
+         "type": "array",
+         "required": true,
+         "content": "An array that contains the IPv6 addresses for secondary LOM-compatible Ethernet interfaces for the device.",
+         "keys": [
+          {
+           "key": "SecondaryIPv6AddressListItem",
+           "type": "string",
+           "required": true
+          }
+         ]
+        },
+        {
+         "key": "LOMProtocolVersion",
+         "type": "integer",
+         "required": true,
+         "content": "The LOM protocol version that the device supports. Provide the same value that `LOMProtocolVersion` receives in the `LOMSetupRequestResponse`."
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "request_type": "LOMSetupRequest",
+   "title": "LOM Setup Request Command",
+   "description": "Get information from a device to set up lights-out management (LOM).",
+   "content": "Queries the device for LOM setup information such as IP addresses, protocol version, etc. The MDM server must send this command prior to sending the LOMDeviceRequest command.",
+   "os": {
+    "iOS": {
+     "introduced": "n/a"
+    },
+    "macOS": {
+     "introduced": "11.0"
+    },
+    "tvOS": {
+     "introduced": "n/a"
+    },
+    "visionOS": {
+     "introduced": "n/a"
+    },
+    "watchOS": {
+     "introduced": "n/a"
+    }
+   }
+  },
+  {
+   "request_type": "LogOutUser",
+   "title": "Log Out User Command",
+   "description": "Force the current user to log out of a device.",
+   "content": "This command allows the server to force the current user to logout.",
+   "os": {
+    "iOS": {
+     "introduced": "9.3"
+    },
+    "macOS": {
+     "introduced": "n/a"
+    },
+    "tvOS": {
+     "introduced": "n/a"
+    },
+    "visionOS": {
+     "introduced": "n/a"
+    },
+    "watchOS": {
+     "introduced": "n/a"
+    }
+   }
+  },
+  {
+   "request_type": "ManagedApplicationAttributes",
+   "title": "Managed Application Attributes Command",
+   "description": "Query attributes in managed apps on a device.",
+   "os": {
+    "iOS": {
+     "introduced": "7.0"
+    },
+    "macOS": {
+     "introduced": "n/a"
+    },
+    "tvOS": {
+     "introduced": "10.2"
+    },
+    "visionOS": {
+     "introduced": "1.1"
+    },
+    "watchOS": {
+     "introduced": "10.0"
+    }
+   },
+   "keys": [
+    {
+     "key": "Identifiers",
+     "type": "array",
+     "required": true,
+     "content": "The bundle identifiers of the managed apps.\n\n\u003e Important:\n\u003e For a watchOS app, the identifier needs to be the watch's bundle identifier, which differs from the main bundle identifier for the iPhone the watch pairs with. Obtain the watch's bundle identifier for an app with a watch bundle, in the `watchBundleId` key that's part of the Content Metadata query. For more information on this query, see `Getting app and book information (Legacy)`.",
+     "keys": [
+      {
+       "key": "IdentifiersItem",
+       "type": "string"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "request_type": "ManagedApplicationConfiguration",
+   "title": "Managed Application Configuration Command",
+   "description": "Get app configurations from managed apps on a device.",
+   "os": {
+    "iOS": {
+     "introduced": "7.0"
+    },
+    "macOS": {
+     "introduced": "10.15"
+    },
+    "tvOS": {
+     "introduced": "10.2"
+    },
+    "visionOS": {
+     "introduced": "1.1"
+    },
+    "watchOS": {
+     "introduced": "10.0"
+    }
+   },
+   "keys": [
+    {
+     "key": "Identifiers",
+     "type": "array",
+     "required": true,
+     "content": "The bundle identifiers of the managed apps.\n\n\u003e Important:\n\u003e For a watchOS app, the identifier needs to be the watch's bundle identifier, which differs from the main bundle identifier for the iPhone the watch pairs with. Obtain the watch's bundle identifier for an app with a watch bundle, in the `watchBundleId` key that's part of the Content Metadata query. For more information on this query, see `Getting app and book information (Legacy)`.",
+     "keys": [
+      {
+       "key": "IdentifiersItem",
+       "type": "string"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "request_type": "ManagedApplicationFeedback",
+   "title": "Managed Application Feedback Command",
+   "description": "Get app feedback from a managed app on the device.",
+   "os": {
+    "iOS": {
+     "introduced": "7.0"
+    },
+    "macOS": {
+     "introduced": "11.0"
+    },
+    "tvOS": {
+     "introduced": "10.2"
+    },
+    "visionOS": {
+     "introduced": "1.1"
+    },
+    "watchOS": {
+     "introduced": "n/a"
+    }
+   },
+   "keys": [
+    {
+     "key": "Identifiers",
+     "type": "array",
+     "required": true,
+     "content": "The bundle identifiers of the managed apps.",
+     "keys": [
+      {
+       "key": "IdentifiersItem",
+       "type": "string"
+      }
+     ]
+    },
+    {
+     "key": "DeleteFeedback",
+     "type": "boolean",
+     "default": false,
+     "content": "If `true`, delete the app's feedback dictionary after the server reads it. Apps that are managed by Declarative Device Management are ignored."
+    }
+   ]
+  },
+  {
+   "request_type": "ManagedApplicationList",
+   "title": "Managed Application List Command",
+   "description": "Get the status of all managed apps on a device.",
+   "os": {
+    "iOS": {
+     "introduced": "5.0"
+    },
+    "macOS": {
+     "introduced": "11.0"
+    },
+    "tvOS": {
+     "introduced": "10.2"
+    },
+    "visionOS": {
+     "introduced": "1.1"
+    },
+    "watchOS": {
+     "introduced": "10.0"
+    }
+   },
+   "keys": [
+    {
+     "key": "Identifiers",
+     "type": "array",
+     "content": "The bundle identifiers of the managed apps to include in the response.\n\n\u003e Important:\n\u003e For a watchOS app, the identifier needs to be the watch's bundle identifier, which differs from the main bundle identifier for the iPhone the watch pairs with. Obtain the watch's bundle identifier for an app with a watch bundle, in the `watchBundleId` key that's part of the Content Metadata query. For more information on this query, see `Getting app and book information (Legacy)`.",
+     "os": {
+      "iOS": {
+       "introduced": "7.0"
+      }
+     },
+     "keys": [
+      {
+       "key": "IdentifiersItem",
+       "type": "string"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "request_type": "ManagedMediaList",
+   "title": "Managed Media List Command",
+   "description": "Get a list of the managed books on a device.",
+   "content": "This command allows the server to query for installed 3rd party applications.",
+   "os": {
+    "iOS": {
+     "introduced": "8.0"
+    },
+    "macOS": {
+     "introduced": "n/a"
+    },
+    "tvOS": {
+     "introduced": "n/a"
+    },
+    "visionOS": {
+     "introduced": "n/a"
+    },
+    "watchOS": {
+     "introduced": "n/a"
+    }
+   }
+  },
+  {
+   "request_type": "NSExtensionMappings",
+   "title": "NSExtension Mappings Command",
+   "description": "Get a list of the installed extensions for a user on a device.",
+   "content": "This command returns information about installed extensions for a user.\nThe purpose of this command is to allow the server to build a mapping of\nextension identifiers to extension points to provide a UI for generating\n\"com.apple.NSExtension\" payloads.\nRequires \"Query Installed Apps\" right; supported on user channel only",
+   "os": {
+    "iOS": {
+     "introduced": "n/a"
+    },
+    "macOS": {
+     "introduced": "10.13"
+    },
+    "tvOS": {
+     "introduced": "n/a"
+    },
+    "visionOS": {
+     "introduced": "n/a"
+    },
+    "watchOS": {
+     "introduced": "n/a"
+    }
+   }
+  },
+  {
+   "request_type": "OSUpdateStatus",
+   "title": "OS Update Status Command",
+   "description": "Get the status of operating-system updates on a device. Removed: subscribe to the declarative management `softwareupdate.install-state` status item.",
+   "content": "Queries the device for the status of software updates.",
+   "os": {
+    "iOS": {
+     "introduced": "9.0",
+     "deprecated": "26.0",
+     "removed": "27.0",
+     "supervised": true
+    },
+    "macOS": {
+     "introduced": "10.11.5",
+     "deprecated": "26.0",
+     "removed": "27.0",
+     "supervised": true
+    },
+    "tvOS": {
+     "introduced": "12.0",
+     "deprecated": "26.0",
+     "removed": "27.0",
+     "supervised": true
+    },
+    "visionOS": {
+     "introduced": "n/a"
+    },
+    "watchOS": {
+     "introduced": "n/a"
+    }
+   }
+  },
+  {
+   "request_type": "PlayLostModeSound",
+   "title": "Play Lost Mode Sound Command",
+   "description": "Play the Lost Mode sound on a device that's in Lost Mode.",
+   "content": "This command allows the server to tell the device to play a sound if it is in MDM Lost Mode. The sound will play until the device is either removed from Lost Mode or a user disables the sound from the device.",
+   "os": {
+    "iOS": {
+     "introduced": "10.3",
+     "supervised": true
+    },
+    "macOS": {
+     "introduced": "n/a"
+    },
+    "tvOS": {
+     "introduced": "n/a"
+    },
+    "visionOS": {
+     "introduced": "n/a"
+    },
+    "watchOS": {
+     "introduced": "n/a"
+    }
+   }
+  },
+  {
+   "request_type": "ProfileList",
+   "title": "Profile List Command",
+   "description": "Get a list of installed profiles on a device.",
+   "content": "This command allows the MDM server to query for the profiles installed on the device. This command requires the Inspect Profile Manifest right. It's supported on the user channel.",
+   "os": {
+    "iOS": {
+     "introduced": "4.0"
+    },
+    "macOS": {
+     "introduced": "10.7"
+    },
+    "tvOS": {
+     "introduced": "9.0"
+    },
+    "visionOS": {
+     "introduced": "1.1"
+    },
+    "watchOS": {
+     "introduced": "10.0"
+    }
+   },
+   "keys": [
+    {
+     "key": "ManagedOnly",
+     "type": "boolean",
+     "default": false,
+     "content": "If `true`, only include profiles that MDM has installed. For user enrollments, the device ignores this key and always limits the results to managed profiles.",
+     "os": {
+      "iOS": {
+       "introduced": "13.0"
+      },
+      "macOS": {
+       "introduced": "10.15"
+      },
+      "tvOS": {
+       "introduced": "13.0"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "request_type": "ProvisioningProfileList",
+   "title": "Provisioning Profile List Command",
+   "description": "Get a list of installed provisioning profiles on a device.",
+   "content": "This command allows the server to retrieve the list of installed provisioning profiles on the device. This command requires the Inspect Provisioning Profiles right. On macOS, this command is for iOS and iPadOS style provisioning profiles only.",
+   "os": {
+    "iOS": {
+     "introduced": "4.0"
+    },
+    "macOS": {
+     "introduced": "11.0"
+    },
+    "tvOS": {
+     "introduced": "10.2"
+    },
+    "visionOS": {
+     "introduced": "1.1"
+    },
+    "watchOS": {
+     "introduced": "10.0"
+    }
+   },
+   "keys": [
+    {
+     "key": "ManagedOnly",
+     "type": "boolean",
+     "default": false,
+     "content": "If `true`, only include profiles that MDM has installed. For user enrollments, the device ignores this key and always limits the results to managed profiles.",
+     "os": {
+      "iOS": {
+       "introduced": "13.0"
+      },
+      "tvOS": {
+       "introduced": "13.0"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "request_type": "RefreshCellularPlans",
+   "title": "Refresh Cellular Plans Command",
+   "description": "Query a carrier URL for active eSIM cellular-plan profiles on a device.",
+   "content": "Instructs the device to query for active cellular plan eSIM \"profiles\" (not a profile in the MDM sense)\nat the designated carrier eSIM server URL. This command is only supported on cellular devices, and only\na subset of those devices support eSIM configuration management. (Need details from CoreTelephony.)",
+   "os": {
+    "iOS": {
+     "introduced": "13.0"
+    },
+    "macOS": {
+     "introduced": "n/a"
+    },
+    "tvOS": {
+     "introduced": "n/a"
+    },
+    "visionOS": {
+     "introduced": "n/a"
+    },
+    "watchOS": {
+     "introduced": "n/a"
+    }
+   },
+   "keys": [
+    {
+     "key": "eSIMServerURL",
+     "type": "string",
+     "required": true,
+     "content": "The carrier's eSIM server URL to query. Obtain this URL from each carrier separately."
+    }
+   ]
+  },
+  {
+   "request_type": "RemoveApplication",
+   "title": "Remove Application Command",
+   "description": "Remove an app.",
+   "os": {
+    "iOS": {
+     "introduced": "5.0"
+    },
+    "macOS": {
+     "introduced": "11.0"
+    },
+    "tvOS": {
+     "introduced": "10.2"
+    },
+    "visionOS": {
+     "introduced": "1.1"
+    },
+    "watchOS": {
+     "introduced": "10.0"
+    }
+   },
+   "keys": [
+    {
+     "key": "Identifier",
+     "type": "string",
+     "required": true,
+     "content": "The bundle identifier of the managed app.\n\n\u003e Important:\n\u003e For a watchOS app, the identifier needs to be the watch's bundle identifier, which differs from the main bundle identifier for the iPhone the watch pairs with. Obtain the watch's bundle identifier for an app with a watch bundle, in the `watchBundleId` key that's part of the Content Metadata query. For more information on this query, see `Getting app and book information (Legacy)`."
+    }
+   ]
+  },
+  {
+   "request_type": "RemoveMedia",
+   "title": "Remove Media Command",
+   "description": "Remove a previously installed book from a device.",
+   "content": "This command allows an MDM server to remove managed media. This command returns Acknowledged even if the item is not found.",
+   "os": {
+    "iOS": {
+     "introduced": "8.0"
+    },
+    "macOS": {
+     "introduced": "n/a"
+    },
+    "tvOS": {
+     "introduced": "n/a"
+    },
+    "visionOS": {
+     "introduced": "n/a"
+    },
+    "watchOS": {
+     "introduced": "n/a"
+    }
+   },
+   "keys": [
+    {
+     "key": "MediaType",
+     "type": "string",
+     "required": true,
+     "allowed": [
+      "Book"
+     ],
+     "content": "The media type, which can only be `Book`."
+    },
+    {
+     "key": "iTunesStoreID",
+     "type": "string",
+     "content": "The book's iTunes Store identifier."
+    },
+    {
+     "key": "PersistentID",
+     "type": "string",
+     "content": "The book's persistent identifier in reverse-DNS form; for example, `com.acme.manuals.training`."
+    }
+   ]
+  },
+  {
+   "request_type": "RemoveProfile",
+   "title": "Remove Profile Command",
+   "description": "Remove a previously installed profile from the device.",
+   "content": "This command allows the server to remove a profile. This command requires the Profile Installation and Removal Right. It's supported in the user channel.",
+   "os": {
+    "iOS": {
+     "introduced": "4.0"
+    },
+    "macOS": {
+     "introduced": "10.7"
+    },
+    "tvOS": {
+     "introduced": "9.0"
+    },
+    "visionOS": {
+     "introduced": "1.1"
+    },
+    "watchOS": {
+     "introduced": "10.0"
+    }
+   },
+   "keys": [
+    {
+     "key": "Identifier",
+     "type": "string",
+     "required": true,
+     "content": "The identifier of the profile to remove."
+    }
+   ]
+  },
+  {
+   "request_type": "RemoveProvisioningProfile",
+   "title": "Remove Provisioning Profile Command",
+   "description": "Remove a previously installed provisioning profile from a device.",
+   "content": "This command allows the server to remove a provisioning profile. This command requires the Provisioning Profile Installation and Removal right. On macOS, this command is for iOS and iPadOS style provisioning profiles only.",
+   "os": {
+    "iOS": {
+     "introduced": "4.0"
+    },
+    "macOS": {
+     "introduced": "11.0"
+    },
+    "tvOS": {
+     "introduced": "10.2"
+    },
+    "visionOS": {
+     "introduced": "1.1"
+    },
+    "watchOS": {
+     "introduced": "10.0"
+    }
+   },
+   "keys": [
+    {
+     "key": "UUID",
+     "type": "string",
+     "required": true,
+     "content": "The unique identifier of the provisioning profile to remove."
+    }
+   ]
+  },
+  {
+   "request_type": "RequestMirroring",
+   "title": "Request Mirroring Command",
+   "description": "Prompt the user to share their screen using AirPlay Mirroring.",
+   "content": "This command prompts the user to share their screen using AirPlay Mirroring.",
+   "os": {
+    "iOS": {
+     "introduced": "7.0"
+    },
+    "macOS": {
+     "introduced": "10.10"
+    },
+    "tvOS": {
+     "introduced": "n/a"
+    },
+    "visionOS": {
+     "introduced": "n/a"
+    },
+    "watchOS": {
+     "introduced": "n/a"
+    }
+   },
+   "keys": [
+    {
+     "key": "DestinationName",
+     "type": "string",
+     "content": "The name of the AirPlay Mirroring destination."
+    },
+    {
+     "key": "DestinationDeviceID",
+     "type": "string",
+     "content": "The hardware address of the AirPlay Mirroring destination that identifies the device, in the format `xx:xx:xx:xx:xx`. This value isn't case-sensitive. Not available for Apple TV devices running tvOS 18 or later, use `DestinationName` instead."
+    },
+    {
+     "key": "ScanTime",
+     "type": "integer",
+     "content": "The number of seconds, from `10` to `300`, for the device to spend searching for the destination. The default value is `30`."
+    },
+    {
+     "key": "Password",
+     "type": "string",
+     "content": "The screen-sharing password that the device uses when connecting to the destination."
+    }
+   ]
+  },
+  {
+   "request_type": "RestartDevice",
+   "title": "Restart Device Command",
+   "description": "Remotely and immediately restart a device.",
+   "content": "This command requires the Device Lock access right. The device will restart immediately.",
+   "os": {
+    "iOS": {
+     "introduced": "10.3",
+     "supervised": true
+    },
+    "macOS": {
+     "introduced": "10.13"
+    },
+    "tvOS": {
+     "introduced": "10.2",
+     "supervised": true
+    },
+    "visionOS": {
+     "introduced": "n/a"
+    },
+    "watchOS": {
+     "introduced": "n/a"
+    }
+   },
+   "keys": [
+    {
+     "key": "RebuildKernelCache",
+     "type": "boolean",
+     "default": false,
+     "content": "If `true`, the system rebuilds the kernel cache during a device restart. If `BootstrapTokenAllowedForAuthentication` is `true` in the `SecurityInfo` response, the device requests the bootstrap token from the MDM server prior to executing this command.",
+     "os": {
+      "iOS": {
+       "introduced": "n/a"
+      },
+      "macOS": {
+       "introduced": "11.0"
+      },
+      "tvOS": {
+       "introduced": "n/a"
+      }
+     }
+    },
+    {
+     "key": "KextPaths",
+     "type": "array",
+     "content": "If `RebuildKernelCache` is `true`, this value specifies the paths to kexts to add to the auxiliary kernel cache since the last kernel cache rebuild. If not present, the system only adds previously discovered kexts to the kernel cache.",
+     "os": {
+      "iOS": {
+       "introduced": "n/a"
+      },
+      "macOS": {
+       "introduced": "11.0"
+      },
+      "tvOS": {
+       "introduced": "n/a"
+      }
+     },
+     "keys": [
+      {
+       "key": "KextPathsItem",
+       "type": "string"
+      }
+     ]
+    },
+    {
+     "key": "NotifyUser",
+     "type": "boolean",
+     "default": false,
+     "content": "If `true`, notifies the user to restart the device at their convenience. No forced restart occurs unless the device is at `loginwindow` with no logged-in users. The user can dismiss the notification and ignore the request. No further notifications display unless you resend the command.",
+     "os": {
+      "iOS": {
+       "introduced": "n/a"
+      },
+      "macOS": {
+       "introduced": "11.4"
+      },
+      "tvOS": {
+       "introduced": "n/a"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "request_type": "Restrictions",
+   "title": "Restrictions Command",
+   "description": "Get a list of restrictions on the device.",
+   "content": "This command allows the server to determine what restrictions are being enforced on the device, and the total sum of all restrictions. This command requires the Restrictions Query access right. This technically does work on macOS but it returns a blank dictionary and there no plans to change this behavior.",
+   "os": {
+    "iOS": {
+     "introduced": "4.0"
+    },
+    "macOS": {
+     "introduced": "n/a"
+    },
+    "tvOS": {
+     "introduced": "9.0"
+    },
+    "visionOS": {
+     "introduced": "1.1"
+    },
+    "watchOS": {
+     "introduced": "10.0"
+    }
+   },
+   "keys": [
+    {
+     "key": "ProfileRestrictions",
+     "type": "boolean",
+     "default": false,
+     "content": "If `true`, the device reports restrictions from each profile."
+    }
+   ]
+  },
+  {
+   "request_type": "RotateFileVaultKey",
+   "title": "Rotate FileVault Key Command",
+   "description": "Change the FileVault primary password on a device.",
+   "content": "This command allows for changing a device's FileVaultMaster password.",
+   "os": {
+    "iOS": {
+     "introduced": "n/a"
+    },
+    "macOS": {
+     "introduced": "10.9"
+    },
+    "tvOS": {
+     "introduced": "n/a"
+    },
+    "visionOS": {
+     "introduced": "n/a"
+    },
+    "watchOS": {
+     "introduced": "n/a"
+    }
+   },
+   "keys": [
+    {
+     "key": "KeyType",
+     "type": "string",
+     "required": true,
+     "allowed": [
+      "personal",
+      "institutional"
+     ],
+     "content": "The type of FileVault key you want to change the password for. Set this value to `personal` and set a value for `Password` in the `FileVaultUnlock` dictionary to enable unlocking a device with a password. Set this value to `institutional` and set values for `PrivateKeyExport` and `PrivateKeyExportPassword` in the `FileVaultUnlock` dictionary."
+    },
+    {
+     "key": "FileVaultUnlock",
+     "type": "dictionary",
+     "required": true,
+     "content": "A dictionary that contains FileVault unlock options.",
+     "keys": [
+      {
+       "key": "Password",
+       "type": "string",
+       "content": "A FileVault user's password, or if using a CoreStorage volume, the personal recovery key."
+      },
+      {
+       "key": "PrivateKeyExport",
+       "type": "data",
+       "content": "The data for a .p12 export of the private key for the current institutional recovery key, which requires that `KeyType` is `institutional`. The system ignores this key on APFS volumes.",
+       "os": {
+        "macOS": {
+         "deprecated": "10.15"
+        }
+       }
+      },
+      {
+       "key": "PrivateKeyExportPassword",
+       "type": "string",
+       "content": "The password for `PrivateKeyExport`. Either `Password` or both `PrivateKeyExport` and `PrivateKeyExportPassword` must be present. The system ignores this key on APFS volumes.",
+       "os": {
+        "macOS": {
+         "deprecated": "10.15"
+        }
+       }
+      }
+     ]
+    },
+    {
+     "key": "NewCertificate",
+     "type": "data",
+     "content": "A DER-encoded certificate for creating a new institutional recovery key, which the system requires if `KeyType` is `institutional`."
+    },
+    {
+     "key": "ReplyEncryptionCertificate",
+     "type": "data",
+     "content": "A DER-encoded certificate for encrypting the new personal recovery key in a wrapper conforming to the IETF Cryptographic Message Syntax (CMS) standard."
+    }
+   ]
+  },
+  {
+   "request_type": "ScheduleOSUpdate",
+   "title": "Schedule OS Update Command",
+   "description": "Schedule an update of the operating system on a device. Removed: use the declarative management `com.apple.configuration.softwareupdate.enforcement.specific` configuration.",
+   "content": "This command allows the server to schedule an OS update.",
+   "os": {
+    "iOS": {
+     "introduced": "9.0",
+     "deprecated": "26.0",
+     "removed": "27.0",
+     "supervised": true
+    },
+    "macOS": {
+     "introduced": "10.11",
+     "deprecated": "26.0",
+     "removed": "27.0",
+     "supervised": true
+    },
+    "tvOS": {
+     "introduced": "12.0",
+     "deprecated": "26.0",
+     "removed": "27.0",
+     "supervised": true
+    },
+    "visionOS": {
+     "introduced": "n/a"
+    },
+    "watchOS": {
+     "introduced": "n/a"
+    }
+   },
+   "keys": [
+    {
+     "key": "Updates",
+     "type": "array",
+     "required": true,
+     "content": "An array of dictionaries specifying the updates to download or install. If this value is missing, the device applies the default behavior for handling updates.\nThe device ignores this command and returns an informational error if a Declarative Device Management `SoftwareUpdateEnforcementSpecific` configuration manages the software update, as the configuration takes precedence.",
+     "keys": [
+      {
+       "key": "UpdatesItem",
+       "type": "dictionary",
+       "required": true,
+       "content": "A dictionary that describes the available operating-system updates item.",
+       "keys": [
+        {
+         "key": "ProductKey",
+         "type": "string",
+         "content": "The product key that represents the update."
+        },
+        {
+         "key": "ProductVersion",
+         "type": "string",
+         "content": "The version of the update, which the system requires if `ProductKey` isn't present.\n\n\u003e Note:\n\u003e This value isn't available for use with Background Security Improvement updates.",
+         "os": {
+          "iOS": {
+           "introduced": "11.3"
+          },
+          "macOS": {
+           "introduced": "12.0"
+          },
+          "tvOS": {
+           "introduced": "12.2"
+          }
+         }
+        },
+        {
+         "key": "InstallAction",
+         "type": "string",
+         "required": true,
+         "allowed": [
+          "Default",
+          "DownloadOnly",
+          "InstallASAP",
+          "NotifyOnly",
+          "InstallLater",
+          "InstallForceRestart"
+         ],
+         "content": "The install action, which is one of the following values:\n\n* `Default`: Download or install the update, depending on the current state. You can check the `UpdateResults` dictionary to review scheduled updates. This value is available in iOS 9 and later, macOS 10.11 and later, and tvOS 12 and later.\n* `DownloadOnly`: Download the software update without installing it. This value is available in iOS 9 and later, macOS 11 and later, and tvOS 12 and later.\n* `InstallASAP`: In iOS and tvOS, install a previously downloaded software update. In macOS, download the software update and trigger the restart countdown notification. This value is available in iOS 9 and later, macOS 10.11 and later, and tvOS 12 and later.\n* `NotifyOnly`: Download the software update and notify the user through the App Store. This value is available in macOS 10.11 and later.\n* `InstallLater`: Download the software update and install it at a later time. This value is available in macOS 10.11 and later.\n* `InstallForceRestart`: Perform the `Default` action, and then force a restart if the update requires it. This value is available in macOS 11 and later.\n\n\n\u003e Warning:\n\u003e `InstallForceRestart` may result in data loss."
+        },
+        {
+         "key": "MaxUserDeferrals",
+         "type": "integer",
+         "content": "The maximum number of times the system allows the user to postpone an update before it's installed. The system prompts the user once a day.\n\nThis key is only supported when `InstallAction` is `InstallLater` and only supported for minor OS updates (for example, macOS 12.x to 12.y).",
+         "os": {
+          "iOS": {
+           "introduced": "n/a"
+          },
+          "macOS": {
+           "introduced": "12.0"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "Priority",
+         "type": "string",
+         "default": "Low",
+         "allowed": [
+          "Low",
+          "High"
+         ],
+         "content": "The scheduling priority for downloading and preparing the requested update. This is only supported for minor OS updates (macOS 12.x to 12.y).\n\n Prior versions of macOS used a priority of `Low`.",
+         "os": {
+          "iOS": {
+           "introduced": "n/a"
+          },
+          "macOS": {
+           "introduced": "12.3"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          }
+         }
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "request_type": "ScheduleOSUpdateScan",
+   "title": "Schedule OS Update Scan Command",
+   "description": "Schedule a background scan for operating-system updates on a device. Removed: use the declarative management `com.apple.configuration.softwareupdate.enforcement.specific` configuration.",
+   "content": "Requests that the device perform a background scan for OS updates.",
+   "os": {
+    "iOS": {
+     "introduced": "n/a"
+    },
+    "macOS": {
+     "introduced": "10.11",
+     "deprecated": "26.0",
+     "removed": "27.0",
+     "supervised": true
+    },
+    "tvOS": {
+     "introduced": "n/a"
+    },
+    "visionOS": {
+     "introduced": "n/a"
+    },
+    "watchOS": {
+     "introduced": "n/a"
+    }
+   },
+   "keys": [
+    {
+     "key": "Force",
+     "type": "boolean",
+     "default": false,
+     "content": "If `true`, force a scan to start immediately. Otherwise, the scan starts at a system-determined time."
+    }
+   ]
+  },
+  {
+   "request_type": "SecurityInfo",
+   "title": "Security Info Command",
+   "description": "Get security-related information about a device.",
+   "content": "This command queries the device for security-related information. Queries are available if the MDM host has the Security Query right.",
+   "os": {
+    "iOS": {
+     "introduced": "4.0"
+    },
+    "macOS": {
+     "introduced": "10.7"
+    },
+    "tvOS": {
+     "introduced": "9.0"
+    },
+    "visionOS": {
+     "introduced": "1.1"
+    },
+    "watchOS": {
+     "introduced": "10.0"
+    }
+   }
+  },
+  {
+   "request_type": "SetAutoAdminPassword",
+   "title": "Set Auto Admin Password Command",
+   "description": "Update the local administrator account password.",
+   "content": "Allows changing the password of a local admin account that was created by Setup Assistant during ADE enrollment via the AccountConfiguration command.",
+   "os": {
+    "iOS": {
+     "introduced": "n/a"
+    },
+    "macOS": {
+     "introduced": "10.11",
+     "requires_dep": true
+    },
+    "tvOS": {
+     "introduced": "n/a"
+    },
+    "visionOS": {
+     "introduced": "n/a"
+    },
+    "watchOS": {
+     "introduced": "n/a"
+    }
+   },
+   "keys": [
+    {
+     "key": "GUID",
+     "type": "string",
+     "required": true,
+     "content": "The unique identifier of the local administrator account. If this value doesn't match the GUID of an administrator account that MDM created during Automated Device Enrollment (ADE) enrollment, the command returns an error."
+    },
+    {
+     "key": "passwordHash",
+     "type": "data",
+     "required": true,
+     "content": "The precreated salted SHA-512 PBKDF2 password hash for the account.\n\nCreate this hash on the server using the CommonCrypto libraries, or equivalent, as a salted SHA-512 PBKDF2 dictionary that contains these elements:\n\n- `entropy`: The derived key from the password hash; for example, from `CCKeyDerivationPBKDF()`\n- `salt`: The 32-byte randomized salt; for example, from `CCRandomCopyBytes()`\n- `iterations:` The number of iterations; for example, from `CCCalibratePBKDF()` using a minimum hash time of 100 milliseconds, or if unknown, a number in the range of 20,000 to 40,000 iterations\n\nPlace the dictionary that contains these elements into an outer dictionary with the key `SALTED-SHA512-PBKDF2`. Convert this dictionary to binary data before setting it as the value for `passwordHash`."
+    }
+   ]
+  },
+  {
+   "request_type": "SetFirmwarePassword",
+   "title": "Set Firmware Password Command",
+   "description": "Change or clear the firmware password on a device.",
+   "content": "Changes or clears the firmware password for the device. Requires the \"Device lock and passcode removal right\". This command is not available on a Mac with Apple silicon.",
+   "os": {
+    "iOS": {
+     "introduced": "n/a"
+    },
+    "macOS": {
+     "introduced": "10.13"
+    },
+    "tvOS": {
+     "introduced": "n/a"
+    },
+    "visionOS": {
+     "introduced": "n/a"
+    },
+    "watchOS": {
+     "introduced": "n/a"
+    }
+   },
+   "keys": [
+    {
+     "key": "CurrentPassword",
+     "type": "string",
+     "content": "The current password, which you must set if the device has a firmware password."
+    },
+    {
+     "key": "NewPassword",
+     "type": "string",
+     "required": true,
+     "content": "The new firmware password. Set to an empty string to clear the password. The characters in this value must consist of low-ASCII, printable characters (`0x20` through `0x7E`) to ensure that all characters are enterable on the EFI login screen."
+    },
+    {
+     "key": "AllowOroms",
+     "type": "boolean",
+     "default": false,
+     "content": "If `true`, enable ROMs."
+    }
+   ]
+  },
+  {
+   "request_type": "SetRecoveryLock",
+   "title": "Set Recovery Lock Command",
+   "description": "Set or clear the Recovery Lock password.",
+   "content": "Sets or clears the recovery lock password (Apple silicon devices only). Requires the \"Device lock and passcode removal right\".",
+   "os": {
+    "iOS": {
+     "introduced": "n/a"
+    },
+    "macOS": {
+     "introduced": "11.5"
+    },
+    "tvOS": {
+     "introduced": "n/a"
+    },
+    "visionOS": {
+     "introduced": "n/a"
+    },
+    "watchOS": {
+     "introduced": "n/a"
+    }
+   },
+   "keys": [
+    {
+     "key": "CurrentPassword",
+     "type": "string",
+     "content": "If the device has a Recovery Lock password set, the system requires the current password."
+    },
+    {
+     "key": "NewPassword",
+     "type": "string",
+     "required": true,
+     "content": "The new password for Recovery Lock. Set as an empty string to clear the Recovery Lock password."
+    }
+   ]
+  },
+  {
+   "request_type": "Settings",
+   "title": "Settings Command",
+   "description": "Configure settings on a device.",
+   "content": "This command allows the server to set settings on the device. These settings take effect on a one-time basis. The user may still be able to change the settings at a later time. This command requires the ApplySettings right.",
+   "os": {
+    "iOS": {
+     "introduced": "5.0"
+    },
+    "macOS": {
+     "introduced": "10.9"
+    },
+    "tvOS": {
+     "introduced": "9.0"
+    },
+    "visionOS": {
+     "introduced": "1.1"
+    },
+    "watchOS": {
+     "introduced": "10.0"
+    }
+   },
+   "keys": [
+    {
+     "key": "Settings",
+     "type": "array",
+     "required": true,
+     "content": "An array of dictionaries that contains the settings.",
+     "keys": [
+      {
+       "key": "Wallpaper",
+       "type": "dictionary",
+       "content": "A dictionary that contains wallpaper settings. This setting doesn't support user enrollment. Starting in iOS 16 and iPadOS 17, when setting the wallpaper for the first time, both locations update. After that, you can set either location separately.",
+       "os": {
+        "iOS": {
+         "introduced": "8.0",
+         "supervised": true
+        },
+        "macOS": {
+         "introduced": "n/a"
+        },
+        "tvOS": {
+         "introduced": "n/a"
+        },
+        "visionOS": {
+         "introduced": "n/a"
+        },
+        "watchOS": {
+         "introduced": "n/a"
+        }
+       },
+       "keys": [
+        {
+         "key": "Item",
+         "type": "string",
+         "required": true,
+         "allowed": [
+          "Wallpaper"
+         ],
+         "content": "A string that identifies this setting."
+        },
+        {
+         "key": "Image",
+         "type": "data",
+         "required": true,
+         "content": "A Base64-encoded image in either PNG or JPG format to use for wallpaper."
+        },
+        {
+         "key": "Where",
+         "type": "integer",
+         "required": true,
+         "allowed": [
+          1,
+          2,
+          3
+         ],
+         "content": "A number that indicates where to use the wallpaper, which is one of the following values:\n\n- `1`: Lock Screen\n- `2`: Home Screen\n- `3`: Both Lock and Home Screens.\n\n  In iOS 16 and later, and iPadOS 17 and later, when you set the wallpaper for the first time, the system sets both the Lock Screen and Home Screen. After that, you can separately set each location."
+        }
+       ]
+      },
+      {
+       "key": "DataRoaming",
+       "type": "dictionary",
+       "content": "A dictionary that contains data roaming settings. This setting requires the Network Information access right, and doesn't support user enrollment.",
+       "os": {
+        "iOS": {},
+        "macOS": {
+         "introduced": "n/a"
+        },
+        "tvOS": {
+         "introduced": "n/a"
+        },
+        "visionOS": {
+         "introduced": "n/a"
+        },
+        "watchOS": {
+         "introduced": "n/a"
+        }
+       },
+       "keys": [
+        {
+         "key": "Item",
+         "type": "string",
+         "required": true,
+         "allowed": [
+          "DataRoaming"
+         ],
+         "content": "A string that identifies this setting."
+        },
+        {
+         "key": "Enabled",
+         "type": "boolean",
+         "required": true,
+         "content": "If `true`, enable data roaming, which also enables voice roaming. If `false`, disable data roaming. The device only applies this setting to the primary SIM."
+        }
+       ]
+      },
+      {
+       "key": "VoiceRoaming",
+       "type": "dictionary",
+       "content": "A dictionary that contains voice roaming settings. This setting requires the Network Information access right, and doesn't support user enrollment.",
+       "os": {
+        "iOS": {
+         "deprecated": "16.0"
+        },
+        "macOS": {
+         "introduced": "n/a"
+        },
+        "tvOS": {
+         "introduced": "n/a"
+        },
+        "visionOS": {
+         "introduced": "n/a"
+        },
+        "watchOS": {
+         "introduced": "n/a"
+        }
+       },
+       "keys": [
+        {
+         "key": "Item",
+         "type": "string",
+         "required": true,
+         "allowed": [
+          "VoiceRoaming"
+         ],
+         "content": "A string that identifies this setting."
+        },
+        {
+         "key": "Enabled",
+         "type": "boolean",
+         "required": true,
+         "content": "If `true`, enable voice roaming. If `false`, disable voice roaming, which also disables data roaming. The setting is only available for certain carriers."
+        }
+       ]
+      },
+      {
+       "key": "PersonalHotspot",
+       "type": "dictionary",
+       "content": "A dictionary that contains Personal Hotspot settings. This setting requires the Network Information access right, and doesn't support user enrollment.",
+       "os": {
+        "iOS": {},
+        "macOS": {
+         "introduced": "n/a"
+        },
+        "tvOS": {
+         "introduced": "n/a"
+        },
+        "visionOS": {
+         "introduced": "n/a"
+        },
+        "watchOS": {
+         "introduced": "n/a"
+        }
+       },
+       "keys": [
+        {
+         "key": "Item",
+         "type": "string",
+         "required": true,
+         "allowed": [
+          "PersonalHotspot"
+         ],
+         "content": "A string that identifies this setting."
+        },
+        {
+         "key": "Enabled",
+         "type": "boolean",
+         "required": true,
+         "content": "If `true`, enable Personal Hotspot. If `false`, disable Personal Hotspot."
+        }
+       ]
+      },
+      {
+       "key": "Bluetooth",
+       "type": "dictionary",
+       "content": "A dictionary that contains Bluetooth settings. This setting requires the Network Information access right, doesn't support user enrollment, and is available only on supervised devices.",
+       "os": {
+        "iOS": {
+         "introduced": "11.3",
+         "supervised": true
+        },
+        "macOS": {
+         "introduced": "10.13.4"
+        },
+        "tvOS": {
+         "introduced": "n/a"
+        },
+        "visionOS": {
+         "introduced": "n/a"
+        },
+        "watchOS": {
+         "introduced": "n/a"
+        }
+       },
+       "keys": [
+        {
+         "key": "Item",
+         "type": "string",
+         "required": true,
+         "allowed": [
+          "Bluetooth"
+         ],
+         "content": "A string that identifies this setting."
+        },
+        {
+         "key": "Enabled",
+         "type": "boolean",
+         "required": true,
+         "content": "If `true`, enable the Bluetooth setting. If `false`, disable the Bluetooth setting."
+        }
+       ]
+      },
+      {
+       "key": "ApplicationConfiguration",
+       "type": "dictionary",
+       "content": "A dictionary that contains the configurations to apply to the app. Omit this setting to remove existing configurations. This setting requires the App Management access right, supports user enrollment. This setting fails for apps that Declarative Device Management manages.",
+       "os": {
+        "iOS": {
+         "introduced": "7.0"
+        },
+        "macOS": {
+         "introduced": "10.15"
+        },
+        "tvOS": {
+         "introduced": "10.2"
+        },
+        "visionOS": {},
+        "watchOS": {}
+       },
+       "keys": [
+        {
+         "key": "Item",
+         "type": "string",
+         "required": true,
+         "allowed": [
+          "ApplicationConfiguration"
+         ],
+         "content": "A string that identifies this setting."
+        },
+        {
+         "key": "Identifier",
+         "type": "string",
+         "required": true,
+         "content": "The bundle identifier of the managed app.\n\n\u003e Important:\n\u003e For a watchOS app, the identifier needs to be the watch's bundle identifier, which differs from the main bundle identifier for the iPhone the watch pairs with. Obtain the watch's bundle identifier for an app with a watch bundle, in the `watchBundleId` key that's part of the Content Metadata query. For more information on this query, see `Getting app and book information (Legacy)`."
+        },
+        {
+         "key": "Configuration",
+         "type": "dictionary",
+         "content": "A dictionary that contains the configurations to apply to the app. Omit this setting to remove existing configurations.",
+         "keys": [
+          {
+           "key": "ANY",
+           "type": "any",
+           "content": "A dictionary that contains configurations."
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "key": "ApplicationAttributes",
+       "type": "dictionary",
+       "content": "A dictionary that contains the attributes to apply to the app. Omit this setting to remove existing attributes. This setting supports user enrollment. This setting fails for apps that Declarative Device Management manages.",
+       "os": {
+        "iOS": {
+         "introduced": "7.0"
+        },
+        "macOS": {
+         "introduced": "n/a"
+        },
+        "tvOS": {
+         "introduced": "10.2"
+        },
+        "visionOS": {},
+        "watchOS": {}
+       },
+       "keys": [
+        {
+         "key": "Item",
+         "type": "string",
+         "required": true,
+         "allowed": [
+          "ApplicationAttributes"
+         ],
+         "content": "A string that identifies this setting."
+        },
+        {
+         "key": "Identifier",
+         "type": "string",
+         "required": true,
+         "content": "The bundle identifier of the app.\n\n\u003e Important:\n\u003e For a watchOS app, the identifier needs to be the watch's bundle identifier, which differs from the main bundle identifier for the iPhone the watch pairs with. Obtain the watch's bundle identifier for an app with a watch bundle, in the `watchBundleId` key that's part of the Content Metadata query. For more information on this query, see `Getting app and book information (Legacy)`."
+        },
+        {
+         "key": "Attributes",
+         "type": "dictionary",
+         "content": "A dictionary that contains the attributes to apply to the app. Omit this setting to remove existing attributes.",
+         "keys": [
+          {
+           "key": "VPNUUID",
+           "type": "string",
+           "content": "A per-app VPN unique identifier for this app.",
+           "os": {
+            "tvOS": {
+             "introduced": "n/a"
+            }
+           }
+          },
+          {
+           "key": "ContentFilterUUID",
+           "type": "string",
+           "content": "The content filter UUID for this app.",
+           "os": {
+            "iOS": {
+             "introduced": "16.0"
+            },
+            "tvOS": {
+             "introduced": "n/a"
+            },
+            "watchOS": {
+             "introduced": "n/a"
+            }
+           }
+          },
+          {
+           "key": "DNSProxyUUID",
+           "type": "string",
+           "content": "The DNS proxy UUID for this app.",
+           "os": {
+            "iOS": {
+             "introduced": "16.0"
+            },
+            "tvOS": {
+             "introduced": "n/a"
+            },
+            "watchOS": {
+             "introduced": "n/a"
+            }
+           }
+          },
+          {
+           "key": "RelayUUID",
+           "type": "string",
+           "content": "The relay UUID for this app.",
+           "os": {
+            "iOS": {
+             "introduced": "17.0"
+            },
+            "tvOS": {
+             "introduced": "n/a"
+            },
+            "watchOS": {
+             "introduced": "n/a"
+            }
+           }
+          },
+          {
+           "key": "AssociatedDomains",
+           "type": "array",
+           "content": "An array that contains the associated domains to add to this app.",
+           "os": {
+            "iOS": {
+             "introduced": "13.0"
+            },
+            "tvOS": {
+             "introduced": "n/a"
+            }
+           },
+           "keys": [
+            {
+             "key": "AssociatedDomain",
+             "type": "string"
+            }
+           ]
+          },
+          {
+           "key": "AssociatedDomainsEnableDirectDownloads",
+           "type": "boolean",
+           "default": false,
+           "content": "If `true`, perform claimed site association verification directly at the domain, instead of on Apple's servers. Only set this to `true` for domains that can't access the internet.",
+           "os": {
+            "iOS": {
+             "introduced": "14.0"
+            },
+            "tvOS": {
+             "introduced": "n/a"
+            }
+           }
+          },
+          {
+           "key": "Removable",
+           "type": "boolean",
+           "default": true,
+           "content": "If `false`, this app isn't removable while it's managed.",
+           "os": {
+            "iOS": {
+             "introduced": "14.0"
+            },
+            "tvOS": {
+             "introduced": "14.0"
+            }
+           }
+          },
+          {
+           "key": "TapToPayScreenLock",
+           "type": "boolean",
+           "default": false,
+           "content": "If true, the system require Tap to Pay on iPhone users to use Face ID or a passcode to unlock their device after every transaction that requires a customer's card PIN. If `false`, the user can configure this setting on their device.",
+           "os": {
+            "iOS": {
+             "introduced": "16.4"
+            },
+            "tvOS": {
+             "introduced": "n/a"
+            },
+            "visionOS": {
+             "introduced": "n/a"
+            },
+            "watchOS": {
+             "introduced": "n/a"
+            }
+           }
+          },
+          {
+           "key": "CellularSliceUUID",
+           "type": "string",
+           "content": "The data network name (DNN) or app category. For DNN, the value is `DNN:name`, where `name` is the carrier-provided DNN name. For app category, the value is `AppCategory:category`, where `category` is a carrier-provided string like \"Enterprise1\"`.`",
+           "os": {
+            "iOS": {
+             "introduced": "17.0"
+            },
+            "tvOS": {
+             "introduced": "n/a"
+            },
+            "visionOS": {
+             "introduced": "n/a"
+            },
+            "watchOS": {
+             "introduced": "n/a"
+            }
+           }
+          },
+          {
+           "key": "Hideable",
+           "type": "boolean",
+           "default": true,
+           "content": "If `false`, the system prevents the user from hiding the app. It doesn't affect the user's ability to leave it in the App Library, while removing it from the Home Screen.",
+           "os": {
+            "iOS": {
+             "introduced": "18.1"
+            },
+            "tvOS": {
+             "introduced": "n/a"
+            },
+            "visionOS": {
+             "introduced": "n/a"
+            },
+            "watchOS": {
+             "introduced": "n/a"
+            }
+           }
+          },
+          {
+           "key": "Lockable",
+           "type": "boolean",
+           "default": true,
+           "content": "If `false`, the system prevents the user from locking the app. This also prevents the user from hiding the app.",
+           "os": {
+            "iOS": {
+             "introduced": "18.1"
+            },
+            "tvOS": {
+             "introduced": "n/a"
+            },
+            "visionOS": {
+             "introduced": "n/a"
+            },
+            "watchOS": {
+             "introduced": "n/a"
+            }
+           }
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "key": "DeviceName",
+       "type": "dictionary",
+       "content": "A dictionary that contains device name settings. This setting doesn't support user enrollment, and is available only on supervised devices.",
+       "os": {
+        "iOS": {
+         "supervised": true
+        },
+        "macOS": {
+         "introduced": "10.10"
+        },
+        "visionOS": {
+         "introduced": "2.0",
+         "supervised": true
+        },
+        "watchOS": {
+         "introduced": "n/a"
+        }
+       },
+       "keys": [
+        {
+         "key": "Item",
+         "type": "string",
+         "required": true,
+         "allowed": [
+          "DeviceName"
+         ],
+         "content": "A string that identifies this setting."
+        },
+        {
+         "key": "DeviceName",
+         "type": "string",
+         "required": true,
+         "content": "The device's name."
+        }
+       ]
+      },
+      {
+       "key": "HostName",
+       "type": "dictionary",
+       "content": "A dictionary that contains hostname settings. This setting doesn't support user enrollment.",
+       "os": {
+        "iOS": {
+         "introduced": "n/a"
+        },
+        "macOS": {
+         "introduced": "10.11"
+        },
+        "tvOS": {
+         "introduced": "n/a"
+        },
+        "visionOS": {
+         "introduced": "n/a"
+        },
+        "watchOS": {
+         "introduced": "n/a"
+        }
+       },
+       "keys": [
+        {
+         "key": "Item",
+         "type": "string",
+         "required": true,
+         "allowed": [
+          "HostName"
+         ],
+         "content": "The string that defines this setting type."
+        },
+        {
+         "key": "HostName",
+         "type": "string",
+         "required": true,
+         "content": "The hostname for the device."
+        }
+       ]
+      },
+      {
+       "key": "OrganizationInfo",
+       "type": "dictionary",
+       "content": "A dictionary that contains settings about the organization operating the MDM server. This setting supports user enrollment.",
+       "os": {
+        "iOS": {},
+        "macOS": {
+         "introduced": "10.9"
+        }
+       },
+       "keys": [
+        {
+         "key": "Item",
+         "type": "string",
+         "required": true,
+         "allowed": [
+          "OrganizationInfo"
+         ],
+         "content": "The string that defines this setting type."
+        },
+        {
+         "key": "OrganizationInfo",
+         "type": "dictionary",
+         "content": "A dictionary that contains information about the organization operating the MDM server. Omit this setting to remove existing information.",
+         "keys": [
+          {
+           "key": "OrganizationName",
+           "type": "string",
+           "required": true,
+           "content": "A string that describes the organization operating the MDM server for display to the user during certain operations, such as purchasing or installing apps."
+          },
+          {
+           "key": "OrganizationShortName",
+           "type": "string",
+           "content": "A shorter version of `OrganizationName`, preferably a single word or abbreviation, suitable for display to the user in places where a very short name is necessary.",
+           "os": {
+            "iOS": {
+             "introduced": "13.0"
+            },
+            "macOS": {
+             "introduced": "10.15"
+            },
+            "tvOS": {
+             "introduced": "13.0"
+            }
+           }
+          },
+          {
+           "key": "OrganizationAddress",
+           "type": "string",
+           "content": "The organization's address. Use the LF character (`\u0026#10`) to insert line breaks."
+          },
+          {
+           "key": "OrganizationPhone",
+           "type": "string",
+           "content": "The organization's phone number."
+          },
+          {
+           "key": "OrganizationEmail",
+           "type": "string",
+           "content": "The organization's support email address."
+          },
+          {
+           "key": "OrganizationMagic",
+           "type": "string",
+           "content": "A unique identifier for the various services a single organization manages."
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "key": "DefaultApplications",
+       "type": "dictionary",
+       "content": "A dictionary that contains default application bundle identifiers for each default application type that can be set.",
+       "os": {
+        "iOS": {
+         "introduced": "18.2"
+        },
+        "macOS": {
+         "introduced": "n/a"
+        },
+        "tvOS": {
+         "introduced": "n/a"
+        },
+        "visionOS": {
+         "introduced": "2.2"
+        },
+        "watchOS": {
+         "introduced": "n/a"
+        }
+       },
+       "keys": [
+        {
+         "key": "WebBrowser",
+         "type": "string",
+         "content": "The bundle identifier of the app the system sets as the default web browser. This app must be an eligible web browser for the region of the device."
+        },
+        {
+         "key": "Calling",
+         "type": "string",
+         "content": "The bundle identifier of the app that the system sets as the default calling app. This app must be an eligible calling app.",
+         "os": {
+          "iOS": {
+           "introduced": "26.0"
+          },
+          "macOS": {
+           "introduced": "n/a"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "Messaging",
+         "type": "string",
+         "content": "The bundle identifier of the app that the system sets as the default messaging app. This app must be an eligible messaging app.",
+         "os": {
+          "iOS": {
+           "introduced": "26.0"
+          },
+          "macOS": {
+           "introduced": "n/a"
+          },
+          "tvOS": {
+           "introduced": "n/a"
+          },
+          "visionOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        }
+       ]
+      },
+      {
+       "key": "MDMOptions",
+       "type": "dictionary",
+       "content": "A dictionary that contains settings related to the MDM protocol. This setting doesn't support user enrollment.",
+       "os": {
+        "iOS": {
+         "introduced": "7.0"
+        },
+        "macOS": {
+         "introduced": "10.15"
+        },
+        "tvOS": {
+         "introduced": "n/a"
+        },
+        "visionOS": {
+         "introduced": "2.0"
+        },
+        "watchOS": {
+         "introduced": "n/a"
+        }
+       },
+       "keys": [
+        {
+         "key": "Item",
+         "type": "string",
+         "required": true,
+         "allowed": [
+          "MDMOptions"
+         ],
+         "content": "The string that defines this setting type."
+        },
+        {
+         "key": "MDMOptions",
+         "type": "dictionary",
+         "required": true,
+         "content": "A dictionary of MDM options.",
+         "keys": [
+          {
+           "key": "ActivationLockAllowedWhileSupervised",
+           "type": "boolean",
+           "default": false,
+           "content": "If `true`, a supervised device registers itself with Activation Lock when the user enables Find My. This setting is available for supervised devices in iOS 7 and later, and macOS 10.15 and later."
+          },
+          {
+           "key": "BootstrapTokenAllowed",
+           "type": "boolean",
+           "default": false,
+           "content": "If `true`, the server supports the Bootstrap Token commands.",
+           "os": {
+            "iOS": {
+             "introduced": "n/a"
+            },
+            "macOS": {
+             "introduced": "10.15",
+             "deprecated": "11.0"
+            },
+            "tvOS": {
+             "introduced": "n/a"
+            },
+            "visionOS": {
+             "introduced": "n/a"
+            },
+            "watchOS": {
+             "introduced": "n/a"
+            }
+           }
+          },
+          {
+           "key": "PromptUserToAllowBootstrapTokenForAuthentication",
+           "type": "boolean",
+           "default": false,
+           "content": "If `true`, warn the user that they need to reboot into RecoveryOS and allow the MDM server to use the Bootstrap Token for authentication for certain sensitive operations; for example, enabling kernel extensions or installing certain types of software updates. Set this value to `false` if your MDM server doesn't need to perform these operations. The value provided here overrides the value specified in MDM, and only applies when `BootstrapTokenAllowedForAuthentication` is `true` in the `SecurityInfo` response. This value is available for a Mac with Apple silicon in macOS 11 and later.",
+           "os": {
+            "iOS": {
+             "introduced": "n/a"
+            },
+            "macOS": {
+             "introduced": "11.0"
+            },
+            "tvOS": {
+             "introduced": "n/a"
+            },
+            "visionOS": {
+             "introduced": "n/a"
+            },
+            "watchOS": {
+             "introduced": "n/a"
+            }
+           }
+          },
+          {
+           "key": "IdleRebootAllowed",
+           "type": "boolean",
+           "default": false,
+           "content": "If `true`, the device automatically reboots while locked after several days of inactivity. The device sets this to `false` by default for a supervised enrollment. Starting in iOS 26.6 and iPadOS 26.6, changing the effective value from reboot allowed to reboot disallowed requires a reboot or a device unlock before the change takes effect.",
+           "os": {
+            "iOS": {
+             "introduced": "18.4"
+            },
+            "macOS": {
+             "introduced": "n/a"
+            },
+            "tvOS": {
+             "introduced": "n/a"
+            },
+            "visionOS": {
+             "introduced": "n/a"
+            },
+            "watchOS": {
+             "introduced": "n/a"
+            }
+           }
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "key": "MaximumResidentUsers",
+       "type": "dictionary",
+       "content": "A dictionary that contains settings for maximum resident users. Apple deprecated this setting in iOS 13.4. Use 'SharedDeviceConfiguration` instead. This setting is available only for Shared iPad.",
+       "os": {
+        "iOS": {
+         "introduced": "9.3",
+         "deprecated": "13.4"
+        },
+        "macOS": {
+         "introduced": "n/a"
+        },
+        "tvOS": {
+         "introduced": "n/a"
+        },
+        "visionOS": {
+         "introduced": "n/a"
+        },
+        "watchOS": {
+         "introduced": "n/a"
+        }
+       },
+       "keys": [
+        {
+         "key": "Item",
+         "type": "string",
+         "required": true,
+         "allowed": [
+          "MaximumResidentUsers"
+         ],
+         "content": "A string that identifies this setting."
+        },
+        {
+         "key": "MaximumResidentUsers",
+         "type": "integer",
+         "required": true,
+         "content": "The maximum number of users that can use the device. If this value is greater than the value for the maximum possible number of users that the device supports, the MDM server uses that value instead.\n\nThis setting requires that the device is in the `AwaitingConfiguration` phase before it receives the `DeviceConfiguredCommand` message.\n\nWhen a device reaches the maximum number of resident users and a new user tries to sign in, the MDM server removes a synchronized user to make space for the new user. If there are no synchronized users, the new user sign-in fails. A synchronized user is a user that has completed syncing their data."
+        }
+       ]
+      },
+      {
+       "key": "SharedDeviceConfiguration",
+       "type": "dictionary",
+       "content": "A dictionary that contains shared device configuration settings. This setting is available only for Shared iPad in iOS 13.4 and later.",
+       "os": {
+        "iOS": {
+         "introduced": "13.4"
+        },
+        "macOS": {
+         "introduced": "n/a"
+        },
+        "tvOS": {
+         "introduced": "n/a"
+        },
+        "visionOS": {
+         "introduced": "n/a"
+        },
+        "watchOS": {
+         "introduced": "n/a"
+        }
+       },
+       "keys": [
+        {
+         "key": "Item",
+         "type": "string",
+         "required": true,
+         "allowed": [
+          "SharedDeviceConfiguration"
+         ],
+         "content": "A string that identifies this setting.",
+         "os": {
+          "visionOS": {
+           "introduced": "26.0",
+           "supervised": true
+          }
+         }
+        },
+        {
+         "key": "QuotaSize",
+         "type": "integer",
+         "content": "The quota size, in megabytes (MB), for each user on the shared device, or if the quota size is too small, the minimum quota size. Available to Temporary Sessions Only guest users on iOS 17+."
+        },
+        {
+         "key": "ResidentUsers",
+         "type": "integer",
+         "content": "The expected number of users. If this value is greater than the value for the maximum possible number of users that the device supports, the MDM server uses that value instead."
+        },
+        {
+         "key": "UserSessionTimeout",
+         "type": "integer",
+         "content": "The timeout, in seconds, for the user session. The user session logs out automatically after the specified period of inactivity. The minimum value is 30 seconds. Setting this value to `0` removes the timeout.",
+         "os": {
+          "iOS": {
+           "introduced": "14.5"
+          }
+         }
+        },
+        {
+         "key": "TemporarySessionTimeout",
+         "type": "integer",
+         "content": "The timeout, in seconds, for the temporary session. The temporary session logs out automatically after the specified period of inactivity. The minimum value is 30 seconds. Setting this value to `0` removes the timeout.",
+         "os": {
+          "iOS": {
+           "introduced": "14.5"
+          },
+          "visionOS": {
+           "introduced": "26.0",
+           "supervised": true
+          }
+         }
+        },
+        {
+         "key": "TemporarySessionOnly",
+         "type": "boolean",
+         "default": false,
+         "content": "If `true`, the user only sees the Guest Welcome pane and can only log in as a guest user.\n\nIf `false`, the user can sign in with a Managed Apple Account (the existing behavior).",
+         "os": {
+          "iOS": {
+           "introduced": "14.5"
+          }
+         }
+        },
+        {
+         "key": "ManagedAppleIDDefaultDomains",
+         "type": "array",
+         "content": "A list of domains that the Shared iPad login screen displays. The user can pick a domain from the list to complete their Managed Apple Account.\n\nIf this list contains more than 3 domains, the system picks 3 at random for display.",
+         "os": {
+          "iOS": {
+           "introduced": "16.0"
+          }
+         },
+         "keys": [
+          {
+           "key": "AppleID domain",
+           "type": "string"
+          }
+         ]
+        },
+        {
+         "key": "OnlineAuthenticationGracePeriod",
+         "type": "integer",
+         "content": "A grace period (in days) for Shared iPad online authentication. The Shared iPad only verifies the user's passcode locally during login for users that already exist on the device. However, the system requires an online authentication (against Apple's identity server) after the number of days specified by this setting.\n\nSetting this value to 0 enforces online authentication every time.",
+         "os": {
+          "iOS": {
+           "introduced": "16.0"
+          }
+         }
+        },
+        {
+         "key": "SkipLanguageAndLocaleSetupForNewUsers",
+         "type": "boolean",
+         "default": false,
+         "content": "If `true`, the system picks the system language and locale automatically for the new Shared iPad user.",
+         "os": {
+          "iOS": {
+           "introduced": "16.2"
+          }
+         }
+        },
+        {
+         "key": "AwaitUserConfiguration",
+         "type": "dictionary",
+         "content": "If enabled, the Shared iPad device enters Setup Assistant after the user triggers a login. The MDM server has a chance to configure the device and user. After configuration, the server needs to send a `User-Configured-Command` command to the user channel to unblock the login. This feature requires the device to have network access during the login process.",
+         "os": {
+          "iOS": {
+           "introduced": "17.0"
+          }
+         },
+         "keys": [
+          {
+           "key": "Enabled",
+           "type": "boolean",
+           "required": true,
+           "content": "If `true`, the device stops at the Setup Assistant pane after user login. The user can't use the device until it receives a `User-Configured-Command` command."
+          }
+         ]
+        },
+        {
+         "key": "PasscodePolicy",
+         "type": "dictionary",
+         "content": "A dictionary that contains passcode policies.",
+         "os": {
+          "iOS": {
+           "introduced": "17.0"
+          }
+         },
+         "keys": [
+          {
+           "key": "PasscodeLockGracePeriod",
+           "type": "integer",
+           "allowed": [
+            0,
+            60,
+            300,
+            900,
+            3600,
+            14400
+           ],
+           "content": "The number of seconds before a locked screen requires the user to enter the device passcode to unlock it. The minimum value is `0` seconds and the maximum value is `14400` seconds.\n\nIf a device has a passcode, a change to a larger value doesn't take effect until the user logs out or removes the passcode. For this reason, it's better to set this value before the user sets a passcode.\n\nIf the value is less than one of the known values, the device uses the next lowest value. For example a value of 299 results in an effective setting of 60.\n\nThis setting won't take effect if `TemporarySessionOnly` is `true` because there's no passcode for a temporary session."
+          },
+          {
+           "key": "AutoLockTime",
+           "type": "integer",
+           "content": "The number of seconds before a device goes to sleep after being idle. The minimum value for this setting is `120` seconds."
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "key": "DiagnosticSubmission",
+       "type": "dictionary",
+       "content": "A dictionary that contains diagnostic submission settings. This setting is available only for Shared iPad in iOS 9.3 and later.",
+       "os": {
+        "iOS": {
+         "introduced": "9.3"
+        },
+        "macOS": {
+         "introduced": "n/a"
+        },
+        "tvOS": {
+         "introduced": "n/a"
+        },
+        "visionOS": {
+         "introduced": "n/a"
+        },
+        "watchOS": {
+         "introduced": "n/a"
+        }
+       },
+       "keys": [
+        {
+         "key": "Item",
+         "type": "string",
+         "required": true,
+         "allowed": [
+          "DiagnosticSubmission"
+         ],
+         "content": "The string that defines this setting type."
+        },
+        {
+         "key": "Enabled",
+         "type": "boolean",
+         "required": true,
+         "content": "If `true`, enables diagnostic submission. If `false`, disables diagnostic submission."
+        }
+       ]
+      },
+      {
+       "key": "AppAnalytics",
+       "type": "dictionary",
+       "content": "A dictionary that contains settings for sharing app analytics. This setting is available only for Shared iPad in iOS 9.3.2 and later.",
+       "os": {
+        "iOS": {
+         "introduced": "9.3.2"
+        },
+        "macOS": {
+         "introduced": "n/a"
+        },
+        "tvOS": {
+         "introduced": "n/a"
+        },
+        "visionOS": {
+         "introduced": "n/a"
+        },
+        "watchOS": {
+         "introduced": "n/a"
+        }
+       },
+       "keys": [
+        {
+         "key": "Item",
+         "type": "string",
+         "required": true,
+         "allowed": [
+          "AppAnalytics"
+         ],
+         "content": "A string that identifies this setting."
+        },
+        {
+         "key": "Enabled",
+         "type": "boolean",
+         "required": true,
+         "content": "If `true`, enable sharing app analytics with app developers. If `false`, disable sharing app analytics."
+        }
+       ]
+      },
+      {
+       "key": "PasscodeLockGracePeriod",
+       "type": "dictionary",
+       "content": "A dictionary that contains password lock grace period settings. This setting is available only for Shared iPad in iOS 9.3.2 and later.\nThis key is deprecated. Use 'PasscodeLockGracePeriod' in SettingsCommand.Command.Settings.SharedDeviceConfiguration.PasscodePolicy instead.",
+       "os": {
+        "iOS": {
+         "introduced": "9.3.2",
+         "deprecated": "17.0"
+        },
+        "macOS": {
+         "introduced": "n/a"
+        },
+        "tvOS": {
+         "introduced": "n/a"
+        },
+        "visionOS": {
+         "introduced": "n/a"
+        },
+        "watchOS": {
+         "introduced": "n/a"
+        }
+       },
+       "keys": [
+        {
+         "key": "Item",
+         "type": "string",
+         "required": true,
+         "allowed": [
+          "PasscodeLockGracePeriod"
+         ],
+         "content": "A string that identifies this setting."
+        },
+        {
+         "key": "PasscodeLockGracePeriod",
+         "type": "integer",
+         "required": true,
+         "allowed": [
+          0,
+          60,
+          300,
+          900,
+          3600,
+          14400
+         ],
+         "content": "The number of seconds before a locked screen requires the user to enter the device passcode to unlock it. The minimum value is `0` seconds and the maximum value is `14400` seconds.\n\nIf a device has a passcode, a change to a larger value doesn't take effect until the user logs out or removes the passcode. For this reason, it's better to set this value before the user sets a passcode.\n\nIf the value is less than one of the known values, the device uses the next lowest value. For example a value of 299 results in an effective setting of 60.\n\nThis setting won't take effect if `TemporarySessionOnly` is `true` because there's no passcode for a temporary session."
+        }
+       ]
+      },
+      {
+       "key": "TimeZone",
+       "type": "dictionary",
+       "content": "A dictionary that contains time zone settings. This setting is available only on supervised devices and doesn't support user enrollment.",
+       "os": {
+        "iOS": {
+         "introduced": "14.0",
+         "supervised": true
+        },
+        "macOS": {
+         "introduced": "n/a"
+        },
+        "tvOS": {
+         "introduced": "14.0",
+         "supervised": true
+        },
+        "visionOS": {
+         "introduced": "2.0",
+         "supervised": true
+        },
+        "watchOS": {
+         "introduced": "n/a"
+        }
+       },
+       "keys": [
+        {
+         "key": "Item",
+         "type": "string",
+         "required": true,
+         "allowed": [
+          "TimeZone"
+         ],
+         "content": "A string that identifies this setting."
+        },
+        {
+         "key": "TimeZone",
+         "type": "string",
+         "required": true,
+         "content": "The Internet Assigned Numbers Authority (IANA) time zone database name.\n\nIf the `forceAutomaticDateAndTime` restriction is set in `Restrictions`, this setting fails with an error. Otherwise, setting this value disables automatic time zone logic. The user is still be able to change the time zone; for example, by turning automatic date and time back on. The intention is to allow setting the time zone when automatic determination isn't be available, such as when Location Services are off."
+        }
+       ]
+      },
+      {
+       "key": "SoftwareUpdateSettings",
+       "type": "dictionary",
+       "content": "A dictionary that contains software update settings. This setting doesn't support user enrollment.\n\nRemoved: use the declarative management `com.apple.configuration.softwareupdate.settings` configuration.",
+       "os": {
+        "iOS": {
+         "introduced": "14.5",
+         "deprecated": "26.0",
+         "removed": "27.0",
+         "supervised": true
+        },
+        "macOS": {
+         "introduced": "n/a"
+        },
+        "tvOS": {
+         "introduced": "n/a"
+        },
+        "visionOS": {
+         "introduced": "n/a"
+        },
+        "watchOS": {
+         "introduced": "n/a"
+        }
+       },
+       "keys": [
+        {
+         "key": "Item",
+         "type": "string",
+         "required": true,
+         "allowed": [
+          "SoftwareUpdateSettings"
+         ],
+         "content": "A string that represents the type of updates that should appear in the Software Update pane in Settings. Supervised only."
+        },
+        {
+         "key": "RecommendationCadence",
+         "type": "integer",
+         "required": true,
+         "allowed": [
+          0,
+          1,
+          2
+         ],
+         "content": "This value defines how the system presents software updates to the user. When there's more than one available update for the user, the system behaves as follows:\n\n- `0`: Presents both options to the user.\n- `1`: Presents the lower numbered (oldest) software update version.\n- `2`: Presents only the highest numbered (most recent) release available for the device.\n\nThis value has no effect when there's only one available update; the system shows the single available update to the user regardless of the value of this setting."
+        }
+       ]
+      },
+      {
+       "key": "AccessibilitySettings",
+       "type": "dictionary",
+       "content": "A dictionary that contains accessibility settings.",
+       "os": {
+        "iOS": {
+         "introduced": "16.0",
+         "supervised": true
+        },
+        "macOS": {
+         "introduced": "n/a"
+        },
+        "tvOS": {
+         "introduced": "n/a"
+        },
+        "visionOS": {
+         "introduced": "n/a"
+        },
+        "watchOS": {
+         "supervised": true
+        }
+       },
+       "keys": [
+        {
+         "key": "Item",
+         "type": "string",
+         "required": true,
+         "allowed": [
+          "AccessibilitySettings"
+         ],
+         "content": "Sets various accessibility settings. The system allows only keys with explicitly provided values."
+        },
+        {
+         "key": "BoldTextEnabled",
+         "type": "boolean",
+         "default": false,
+         "content": "If `true`, the system enables bold text."
+        },
+        {
+         "key": "IncreaseContrastEnabled",
+         "type": "boolean",
+         "default": false,
+         "content": "If `true`, the system enables increase contrast.",
+         "os": {
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        },
+        {
+         "key": "ReduceMotionEnabled",
+         "type": "boolean",
+         "default": false,
+         "content": "If `true`, the system enables reduced motion."
+        },
+        {
+         "key": "ReduceTransparencyEnabled",
+         "type": "boolean",
+         "default": false,
+         "content": "If `true`, the system enables reduced transparency."
+        },
+        {
+         "key": "TextSize",
+         "type": "integer",
+         "default": 4,
+         "allowed": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11
+         ],
+         "content": "The accessibility text size apps that support dynamic text use. `0` is the smallest value, and `11` is the largest available."
+        },
+        {
+         "key": "TouchAccommodationsEnabled",
+         "type": "boolean",
+         "default": false,
+         "content": "If `true`, the system enables touch accommodations."
+        },
+        {
+         "key": "VoiceOverEnabled",
+         "type": "boolean",
+         "default": false,
+         "content": "If `true`, the system enables voiceover."
+        },
+        {
+         "key": "ZoomEnabled",
+         "type": "boolean",
+         "default": false,
+         "content": "If `true`, the system enables zoom."
+        },
+        {
+         "key": "GrayscaleEnabled",
+         "type": "boolean",
+         "default": false,
+         "content": "If `true`, the system enables grayscale display.",
+         "os": {
+          "iOS": {
+           "introduced": "n/a"
+          },
+          "watchOS": {
+           "introduced": "n/a"
+          }
+         }
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "request_type": "ShutDownDevice",
+   "title": "Shut Down Device Command",
+   "description": "Remotely and immediately shut down a device.",
+   "content": "This command requires the Device Lock access right. The device will shut down immediately.",
+   "os": {
+    "iOS": {
+     "introduced": "10.3",
+     "supervised": true
+    },
+    "macOS": {
+     "introduced": "10.13"
+    },
+    "tvOS": {
+     "introduced": "n/a"
+    },
+    "visionOS": {
+     "introduced": "n/a"
+    },
+    "watchOS": {
+     "introduced": "n/a"
+    }
+   }
+  },
+  {
+   "request_type": "StopMirroring",
+   "title": "Stop Mirroring Command",
+   "description": "Stop mirroring the display to another device.",
+   "content": "This command stops AirPlay mirroring.",
+   "os": {
+    "iOS": {
+     "introduced": "7.0",
+     "supervised": true
+    },
+    "macOS": {
+     "introduced": "10.10"
+    },
+    "tvOS": {
+     "introduced": "n/a"
+    },
+    "visionOS": {
+     "introduced": "n/a"
+    },
+    "watchOS": {
+     "introduced": "n/a"
+    }
+   }
+  },
+  {
+   "request_type": "TriggerEnhancedLogCollection",
+   "title": "Trigger Enhanced Log Collection Command",
+   "description": "Trigger enhanced log collection on the device.",
+   "content": "This command allows supervised devices to collect enhanced log and upload it to a remote server.",
+   "os": {
+    "iOS": {
+     "introduced": "27.0",
+     "supervised": true
+    },
+    "macOS": {
+     "introduced": "27.0",
+     "supervised": true
+    },
+    "tvOS": {
+     "introduced": "27.0",
+     "supervised": true
+    },
+    "visionOS": {
+     "introduced": "n/a"
+    },
+    "watchOS": {
+     "introduced": "n/a"
+    }
+   },
+   "keys": [
+    {
+     "key": "AppleCareToken",
+     "type": "string",
+     "required": true,
+     "content": "The AppleCare token the device uses for authorizing the enhanced log collection session."
+    }
+   ]
+  },
+  {
+   "request_type": "UnlockUserAccount",
+   "title": "Unlock User Account Command",
+   "description": "Unlock a user account that the system locked because of too many failed password attempts.",
+   "content": "This command allows the server to unlock a local user account that has been locked due to too many failed password attempts. Requires \"Device lock and passcode removal right\".",
+   "os": {
+    "iOS": {
+     "introduced": "n/a"
+    },
+    "macOS": {
+     "introduced": "10.13"
+    },
+    "tvOS": {
+     "introduced": "n/a"
+    },
+    "visionOS": {
+     "introduced": "n/a"
+    },
+    "watchOS": {
+     "introduced": "n/a"
+    }
+   },
+   "keys": [
+    {
+     "key": "UserName",
+     "type": "string",
+     "required": true,
+     "content": "The user name of the local account, which can be any local account on the system, not just a managed user account."
+    }
+   ]
+  },
+  {
+   "request_type": "UserConfigured",
+   "title": "User Configured Command",
+   "description": "Inform the device that it can continue past Setup Assistant and finish login.",
+   "content": "Inform the device that it can continue past Setup Assistant and finish login. Only works on Shared iPad devices that have the AwaitUserConfiguration feature enabled.",
+   "os": {
+    "iOS": {
+     "introduced": "17.0",
+     "supervised": true,
+     "requires_dep": true
+    },
+    "macOS": {
+     "introduced": "n/a"
+    },
+    "tvOS": {
+     "introduced": "n/a"
+    },
+    "visionOS": {
+     "introduced": "n/a"
+    },
+    "watchOS": {
+     "introduced": "n/a"
+    }
+   }
+  },
+  {
+   "request_type": "UserList",
+   "title": "User List Command",
+   "description": "Get a list of users with active accounts on a device.",
+   "content": "This command allows the server to query for a list of users that have an active account on the device.",
+   "os": {
+    "iOS": {
+     "introduced": "9.3"
+    },
+    "macOS": {
+     "introduced": "10.13",
+     "supervised": true
+    },
+    "tvOS": {
+     "introduced": "n/a"
+    },
+    "visionOS": {
+     "introduced": "n/a"
+    },
+    "watchOS": {
+     "introduced": "n/a"
+    }
+   }
+  },
+  {
+   "request_type": "ValidateApplications",
+   "title": "Validate Applications Command",
+   "description": "Force validation of developer and universal provisioning profiles for enterprise apps.",
+   "content": "This command allows the server to query for installed 3rd party applications.",
+   "os": {
+    "iOS": {
+     "introduced": "9.2"
+    },
+    "macOS": {
+     "introduced": "n/a"
+    },
+    "tvOS": {
+     "introduced": "10.2"
+    },
+    "visionOS": {
+     "introduced": "1.1"
+    },
+    "watchOS": {
+     "introduced": "n/a"
+    }
+   },
+   "keys": [
+    {
+     "key": "Identifiers",
+     "type": "array",
+     "content": "The bundle identifiers of the enterprise apps to include for validation of associated provisioning profiles, if you choose to provide them. Otherwise, validation occurs for the provisioning profiles for the installed managed apps.",
+     "keys": [
+      {
+       "key": "IdentifiersItem",
+       "type": "string"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "request_type": "VerifyFirmwarePassword",
+   "title": "Verify Firmware Password Command",
+   "description": "Verify the firmware password on a device.",
+   "content": "Verifies the device's firmware password. This command is not available on a Mac with Apple silicon.",
+   "os": {
+    "iOS": {
+     "introduced": "n/a"
+    },
+    "macOS": {
+     "introduced": "10.13"
+    },
+    "tvOS": {
+     "introduced": "n/a"
+    },
+    "visionOS": {
+     "introduced": "n/a"
+    },
+    "watchOS": {
+     "introduced": "n/a"
+    }
+   },
+   "keys": [
+    {
+     "key": "Password",
+     "type": "string",
+     "required": true,
+     "content": "The password to verify."
+    }
+   ]
+  },
+  {
+   "request_type": "VerifyRecoveryLock",
+   "title": "Verify Recovery Lock Command",
+   "description": "Verify the device's Recovery Lock password.",
+   "content": "Verifies the device's recovery lock password. (AppleSilicon devices only)",
+   "os": {
+    "iOS": {
+     "introduced": "n/a"
+    },
+    "macOS": {
+     "introduced": "11.5"
+    },
+    "tvOS": {
+     "introduced": "n/a"
+    },
+    "visionOS": {
+     "introduced": "n/a"
+    },
+    "watchOS": {
+     "introduced": "n/a"
+    }
+   },
+   "keys": [
+    {
+     "key": "Password",
+     "type": "string",
+     "required": true,
+     "content": "The password to verify."
+    }
+   ]
+  }
+ ]
+}

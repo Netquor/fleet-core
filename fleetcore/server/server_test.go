@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"io"
 	"math/big"
 	"net/http"
@@ -241,6 +242,57 @@ func TestEnrollEndToEnd(t *testing.T) {
 	}
 	if code, b := post("/mdm", mdmCT, id, idle, false); code != 200 || bytes.Contains([]byte(b), []byte("CMD-1")) {
 		t.Errorf("the command came again after it was acknowledged: %d %s", code, b)
+	}
+
+	// 4b. The JSON command API: validated, built into a plist, queued, and the answer read back as JSON.
+	jpost := func(body string) (int, map[string]any) {
+		code, b := post("/v1/commands", "application/json", nil, body, true)
+		var m map[string]any
+		_ = json.Unmarshal([]byte(b), &m)
+		return code, m
+	}
+	if code, m := jpost(`{"request_type":"DeviceInformation","params":{"Queries":["SerialNumber"]},"devices":["` + udid + `"],"no_push":true}`); code != 200 || m["command_uuid"] == nil {
+		t.Fatalf("json command: %d %v", code, m)
+	} else {
+		juuid := m["command_uuid"].(string)
+		if code, m := jpost(`{"request_type":"DeviceInformation","params":{"Queries":[5]},"devices":["` + udid + `"]}`); code != 422 || m["problems"] == nil {
+			t.Errorf("a bad query list got %d %v", code, m)
+		}
+		if code, _ := jpost(`{"request_type":"EraseDevice","params":{},"devices":["` + udid + `"]}`); code != 422 {
+			t.Errorf("erase without confirm got %d", code)
+		}
+		code, b := post("/mdm", mdmCT, id, idle, false)
+		if code != 200 || !strings.Contains(b, juuid) || !strings.Contains(b, "<key>RequestType</key>") {
+			t.Fatalf("the device was not handed the JSON command: %d %s", code, b)
+		}
+		answer := `<?xml version="1.0"?><plist version="1.0"><dict><key>CommandUUID</key><string>` + juuid + `</string><key>QueryResponses</key><dict><key>SerialNumber</key><string>C02TEST</string></dict><key>Status</key><string>Acknowledged</string><key>UDID</key><string>` + udid + `</string></dict></plist>`
+		if code, b := post("/mdm", mdmCT, id, answer, false); code != 200 {
+			t.Fatalf("answer: %d %s", code, b)
+		}
+		req, _ := http.NewRequest("GET", ts.URL+"/v1/commands/"+juuid, nil)
+		req.SetBasicAuth("fleetcore", "apikey")
+		r, err := (&http.Client{Transport: &http.Transport{TLSClientConfig: insecure}}).Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got struct {
+			Devices []struct {
+				ID, Status string
+				Result     map[string]any
+			}
+		}
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		r.Body.Close()
+		qr, _ := func() (map[string]any, bool) {
+			if len(got.Devices) != 1 {
+				return nil, false
+			}
+			m, ok := got.Devices[0].Result["QueryResponses"].(map[string]any)
+			return m, ok
+		}()
+		if len(got.Devices) != 1 || got.Devices[0].Status != "Acknowledged" || qr["SerialNumber"] != "C02TEST" {
+			t.Errorf("results: %+v", got)
+		}
 	}
 
 	// 5. The management API wants its key; the CA certificate is public.

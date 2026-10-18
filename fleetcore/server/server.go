@@ -19,6 +19,7 @@ import (
 	"github.com/micromdm/nanolib/log"
 	"github.com/micromdm/nanomdm/certverify"
 	"github.com/micromdm/nanomdm/cryptoutil"
+	"github.com/micromdm/nanomdm/fleetcore/commands"
 	"github.com/micromdm/nanomdm/fleetcore/dep"
 	"github.com/micromdm/nanomdm/fleetcore/enroll"
 	"github.com/micromdm/nanomdm/fleetcore/pki"
@@ -32,6 +33,7 @@ import (
 	"github.com/micromdm/nanomdm/service/nanomdm"
 	"github.com/micromdm/nanomdm/service/webhook"
 	"github.com/micromdm/nanomdm/storage"
+	"github.com/micromdm/nanomdm/storage/mongodb"
 
 	scepchallenge "github.com/micromdm/scep/v2/challenge"
 	scepdepot "github.com/micromdm/scep/v2/depot"
@@ -260,6 +262,20 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		}
 		ps := pushsvc.New(cfg.Storage, cfg.Storage, nanopush.NewFactory(popts...), logger.With("service", "push"))
 		httpapi.HandleAPIv1("/v1", apiAuth, logger, cfg.Storage, ps)
+
+		// ---- JSON command API ----
+		var results commands.ResultReader
+		if rr, ok := cfg.Storage.(interface {
+			CommandResults(ctx context.Context, commandUUID string) ([]mongodb.CommandResult, error)
+		}); ok {
+			results = resultAdapter{rr}
+		}
+		ch, err := commands.Handler("/v1/commands", commands.Default(), cfg.Storage, ps, results, logger.With("handler", "commands"))
+		if err != nil {
+			return nil, fmt.Errorf("command api: %w", err)
+		}
+		mux.Handle("/v1/commands", nlhttp.NewSimpleBasicAuthHandler(ch, "fleetcore", cfg.APIKey, "fleetcore"))
+		mux.Handle("/v1/commands/", nlhttp.NewSimpleBasicAuthHandler(ch, "fleetcore", cfg.APIKey, "fleetcore"))
 	}
 
 	return &Server{Handler: trace.NewTraceLoggingHandler(mux, logger.With("handler", "log"), newTraceID), CAPool: pool, Depot: depot, DEP: depSvc, cfg: cfg}, nil
@@ -292,4 +308,23 @@ func (s *Server) Run(ctx context.Context) error {
 		return nil
 	}
 	return s.DEP.Run(ctx)
+}
+
+// resultAdapter lets the MongoDB storage's results feed the command API without either importing the other.
+type resultAdapter struct {
+	s interface {
+		CommandResults(ctx context.Context, commandUUID string) ([]mongodb.CommandResult, error)
+	}
+}
+
+func (a resultAdapter) CommandResults(ctx context.Context, uuid string) ([]commands.Result, error) {
+	rows, err := a.s.CommandResults(ctx, uuid)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]commands.Result, len(rows))
+	for i, r := range rows {
+		out[i] = commands.Result{ID: r.ID, Status: r.Status, QueuedAt: r.QueuedAt, ResultAt: r.ResultAt, Result: r.Result}
+	}
+	return out, nil
 }

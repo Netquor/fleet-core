@@ -28,6 +28,18 @@ All under `/v1/dep` with the API key (user `fleetcore`):
 
 Covered by `fleetcore/dep` tests (conformance suite; a fake DEP service for fetch, sync and removal).
 
+| JSON command API | `fleetcore/commands`: Apple's 67 MDM commands (generated from apple/device-management by `go run ./tools/gencommands`), validation with per-key errors, plist built for you, results read back as JSON |
+
+### Using the JSON command API
+
+With the API key, under `/v1/commands`:
+
+- `GET types`, `GET types/{RequestType}`: the commands and each one's schema (keys, types, allowed values, OS support).
+- `POST /` with `{"request_type":"DeviceLock","params":{"Message":"Call IT"},"devices":["UDID"],"platform":"macOS"}`: checks the params (unknown keys, missing required keys, wrong types, values outside Apple's allowed lists, keys or commands that do not exist on the platform) and answers 422 with a list of `problems` (path and message) if wrong. Otherwise builds the plist, queues it for each device and pushes (`"no_push":true` to skip). Data is base64, dates RFC 3339. Commands that lose data or lock someone out (EraseDevice, DeviceLock, RemoveProfile and others) need `"confirm":true`.
+- `GET {uuid}`: per device, `Queued` or the device's status and its response as JSON.
+
+Arrays follow Apple's schema where it describes one element type; the Settings command's alternative shapes are checked only as objects.
+
 ## Planned
 
 1. **ADE follow-ups**: an ADE enrollment path that skips the one-use challenge when the device is known from DEP (serial match), and device-assigned events for blueprints.

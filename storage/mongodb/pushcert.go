@@ -48,7 +48,7 @@ func (s *MongoDBStorage) StorePushCert(ctx context.Context, pemCert, pemKey []by
 	}
 	_, err = s.db.Collection(cPushCerts).UpdateOne(ctx, bson.D{{Key: "_id", Value: topic}},
 		mongo.Pipeline{{{Key: "$set", Value: bson.D{
-			{Key: "topic", Value: topic}, {Key: "cert_pem", Value: string(pemCert)}, {Key: "key_pem", Value: string(pemKey)},
+			{Key: "topic", Value: lit(topic)}, {Key: "cert_pem", Value: lit(string(pemCert))}, {Key: "key_pem", Value: lit(string(pemKey))},
 			{Key: "stale_token", Value: bson.D{{Key: "$cond", Value: bson.A{bson.D{{Key: "$eq", Value: bson.A{bson.D{{Key: "$type", Value: "$stale_token"}}, "missing"}}}, 0, bson.D{{Key: "$add", Value: bson.A{"$stale_token", 1}}}}}}},
 			{Key: "created_at", Value: bson.D{{Key: "$ifNull", Value: bson.A{"$created_at", "$$NOW"}}}},
 			{Key: "updated_at", Value: "$$NOW"},

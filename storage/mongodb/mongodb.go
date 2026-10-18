@@ -208,6 +208,7 @@ func (s *MongoDBStorage) StoreAuthenticate(r *mdm.Request, msg *mdm.Authenticate
 				{Key: "bootstrap_token_b64", Value: nil},
 				{Key: "bootstrap_token_at", Value: nil},
 				{Key: "authenticate", Value: string(msg.Raw)},
+				{Key: "authenticate_doc", Value: plistDoc(msg.Raw)},
 				{Key: "authenticate_at", Value: t},
 				{Key: "updated_at", Value: t},
 			}},
@@ -219,7 +220,7 @@ func (s *MongoDBStorage) StoreAuthenticate(r *mdm.Request, msg *mdm.Authenticate
 
 func (s *MongoDBStorage) storeDeviceTokenUpdate(r *mdm.Request, msg *mdm.TokenUpdate) error {
 	t := now()
-	set := bson.D{{Key: "token_update", Value: string(msg.Raw)}, {Key: "token_update_at", Value: t}, {Key: "updated_at", Value: t}}
+	set := bson.D{{Key: "token_update", Value: string(msg.Raw)}, {Key: "token_update_doc", Value: plistDoc(msg.Raw)}, {Key: "token_update_at", Value: t}, {Key: "updated_at", Value: t}}
 	// separately store the Unlock Token per MDM spec
 	if len(msg.UnlockToken) > 0 {
 		set = append(set, bson.E{Key: "unlock_token", Value: msg.UnlockToken}, bson.E{Key: "unlock_token_at", Value: t})
@@ -242,6 +243,7 @@ func (s *MongoDBStorage) storeUserTokenUpdate(r *mdm.Request, msg *mdm.TokenUpda
 				{Key: "user_short_name", Value: nullEmpty(msg.UserShortName)},
 				{Key: "user_long_name", Value: nullEmpty(msg.UserLongName)},
 				{Key: "token_update", Value: string(msg.Raw)},
+				{Key: "token_update_doc", Value: plistDoc(msg.Raw)},
 				{Key: "token_update_at", Value: t},
 				{Key: "updated_at", Value: t},
 			}},
@@ -273,12 +275,12 @@ func (s *MongoDBStorage) StoreTokenUpdate(r *mdm.Request, msg *mdm.TokenUpdate) 
 	_, err = s.db.Collection(cEnrollments).UpdateOne(r.Context(),
 		bson.D{{Key: "_id", Value: r.ID}},
 		mongo.Pipeline{{{Key: "$set", Value: bson.D{
-			{Key: "device_id", Value: deviceID},
-			{Key: "user_id", Value: nullEmpty(userID)},
-			{Key: "type", Value: r.Type.String()},
-			{Key: "topic", Value: msg.Topic},
-			{Key: "push_magic", Value: msg.PushMagic},
-			{Key: "token_hex", Value: msg.Token.String()},
+			{Key: "device_id", Value: lit(deviceID)},
+			{Key: "user_id", Value: lit(nullEmpty(userID))},
+			{Key: "type", Value: lit(r.Type.String())},
+			{Key: "topic", Value: lit(msg.Topic)},
+			{Key: "push_magic", Value: lit(msg.PushMagic)},
+			{Key: "token_hex", Value: lit(msg.Token.String())},
 			{Key: "enabled", Value: true},
 			{Key: "last_seen_at", Value: "$$NOW"},
 			{Key: "updated_at", Value: "$$NOW"},

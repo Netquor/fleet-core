@@ -205,7 +205,7 @@ func RawCommandEnqueueToIDsHandler(enqueuer storage.CommandEnqueuer, pusher push
 		if err != nil {
 			logger.Info("msg", "reading body", "err", err)
 			// synthesize an API result error
-			er := new(api.APIResult)
+			er = new(api.APIResult)
 			amendAPIError(err, &er.EnqueueError)
 			return
 		}

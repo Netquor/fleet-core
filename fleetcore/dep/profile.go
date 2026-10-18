@@ -69,14 +69,14 @@ func strp(s string) *string {
 // Profile makes the DEP profile for the DEP name's device assignments.
 func (s *Service) DefineProfile(ctx context.Context, name string, spec ProfileSpec) (*DefineResult, error) {
 	if spec.Name == "" {
-		return nil, errors.New("the profile needs a name")
+		return nil, ErrInvalidProfile("the profile needs a name")
 	}
 	url := spec.URL
 	if url == "" {
 		url = s.EnrollURL
 	}
 	if url == "" {
-		return nil, errors.New("no enrollment URL: give url, or run the server with its public address")
+		return nil, ErrInvalidProfile("no enrollment URL: give url, or run the server with its public address")
 	}
 	known := map[string]bool{}
 	for _, k := range KnownSetupPanes {
@@ -156,10 +156,20 @@ func (s *Service) profileRoute(mux *http.ServeMux, prefix string) {
 		res, err := s.DefineProfile(r.Context(), r.PathValue("name"), spec)
 		w.Header().Set("Content-Type", "application/json")
 		if err != nil {
-			w.WriteHeader(http.StatusBadGateway)
+			var bad ErrInvalidProfile
+			if errors.As(err, &bad) {
+				w.WriteHeader(http.StatusUnprocessableEntity) // the request is wrong; Apple was not asked
+			} else {
+				w.WriteHeader(http.StatusBadGateway)
+			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"error": err.Error(), "result": res})
 			return
 		}
 		_ = json.NewEncoder(w).Encode(res)
 	})
 }
+
+// ErrInvalidProfile is a profile definition the caller can fix.
+type ErrInvalidProfile string
+
+func (e ErrInvalidProfile) Error() string { return string(e) }

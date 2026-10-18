@@ -194,7 +194,7 @@ func (s *Store) SetDeviceFields(ctx context.Context, id string, fields bson.D, t
 
 // QueryDevices returns devices matching an expanded rule, by ID, starting after a cursor (the last ID of the previous page).
 func (s *Store) QueryDevices(ctx context.Context, r Rule, after string, limit int) ([]Device, error) {
-	if limit <= 0 || limit > 1000 {
+	if limit <= 0 || limit > 1001 {
 		limit = 100
 	}
 	f := s.scope(bson.D{{Key: "$and", Value: bson.A{r.Filter(), bson.D{{Key: "id", Value: bson.D{{Key: "$gt", Value: after}}}}}}})
@@ -759,7 +759,7 @@ func (s *Store) DEPRecord(ctx context.Context, serial string) (*DEPDevice, error
 
 // ListDEP pages through the devices Apple assigned, by serial number.
 func (s *Store) ListDEP(ctx context.Context, after string, limit int) ([]DEPDevice, error) {
-	if limit <= 0 || limit > 1000 {
+	if limit <= 0 || limit > 1001 {
 		limit = 100
 	}
 	cur, err := s.db.Collection(cDEP).Find(ctx, s.scope(bson.D{{Key: "serial", Value: bson.D{{Key: "$gt", Value: after}}}}), options.Find().SetSort(bson.D{{Key: "serial", Value: 1}}).SetLimit(int64(limit)))

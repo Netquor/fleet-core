@@ -131,8 +131,8 @@ func Handler(prefix string, cat *Catalog, enq storage.CommandEnqueuer, pusher pu
 				return
 			}
 			code := 200
-			if err != nil {
-				code = 207
+			if err != nil || (res != nil && res.Error() != nil) {
+				code = 207 // some devices were not reached or not queued: result.status says which
 			}
 			writeJSON(w, code, map[string]any{"command_uuid": uuid, "request_type": req.RequestType, "result": res})
 		case r.Method == http.MethodGet && (r.URL.Path == prefix+"/" || r.URL.Path == prefix):

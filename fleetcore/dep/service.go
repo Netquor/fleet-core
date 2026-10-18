@@ -81,11 +81,35 @@ func (s *Service) Handler(prefix string) http.Handler {
 	l := s.logger
 	tokens := dephttp.NewMethodMux()
 	tokens.Handle("PUT", s.afterTokens(api.StoreAuthTokensHandler(s.Store, l.With("handler", "dep-store-tokens"))))
-	tokens.Handle("GET", api.RetrieveAuthTokensHandler(s.Store, l.With("handler", "dep-get-tokens")))
+	// GET says whether tokens are stored and when they expire; the secrets are never returned.
+	tokens.Handle("GET", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		name := r.URL.Path
+		t, err := s.Store.RetrieveAuthTokens(r.Context(), name)
+		if err != nil {
+			if errors.Is(err, depstorage.ErrNotFound) {
+				http.Error(w, "no tokens are stored for that DEP name", http.StatusNotFound)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		key := t.ConsumerKey
+		if len(key) > 4 {
+			key = "…" + key[len(key)-4:]
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"name": name, "stored": true, "consumer_key_suffix": key, "access_token_expiry": t.AccessTokenExpiry})
+	}))
 	strip("/tokens/", tokens)
 
 	config := dephttp.NewMethodMux()
-	config.Handle("GET", api.RetrieveConfigHandler(s.Store, l.With("handler", "dep-get-config")))
+	config.Handle("GET", s.unlessMissing(func(ctx context.Context, name string) error {
+		c, err := s.Store.RetrieveConfig(ctx, name)
+		if err == nil && c == nil {
+			return depstorage.ErrNotFound
+		}
+		return err
+	}, api.RetrieveConfigHandler(s.Store, l.With("handler", "dep-get-config"))))
 	config.Handle("PUT", api.StoreConfigHandler(s.Store, l.With("handler", "dep-store-config")))
 	strip("/config/", config)
 
@@ -95,7 +119,13 @@ func (s *Service) Handler(prefix string) http.Handler {
 	strip("/tokenpki/", pkiMux)
 
 	assigner := dephttp.NewMethodMux()
-	assigner.Handle("GET", api.RetrieveAssignerProfileHandler(s.Store, l.With("handler", "dep-get-assigner")))
+	assigner.Handle("GET", s.unlessMissing(func(ctx context.Context, name string) error {
+		uuid, _, err := s.Store.RetrieveAssignerProfile(ctx, name)
+		if err == nil && uuid == "" {
+			return depstorage.ErrNotFound
+		}
+		return err
+	}, api.RetrieveAssignerProfileHandler(s.Store, l.With("handler", "dep-get-assigner"))))
 	assigner.Handle("PUT", api.StoreAssignerProfileHandler(s.Store, l.With("handler", "dep-store-assigner")))
 	strip("/assigner/", assigner)
 
@@ -124,6 +154,17 @@ func (s *Service) Handler(prefix string) http.Handler {
 	ph = delHeader(ph, "Authorization")
 	mux.Handle(prefix+"/proxy/", ph)
 	return mux
+}
+
+// unlessMissing answers 404 when the stored thing is not there; NanoDEP's own handlers answer 500 for that.
+func (s *Service) unlessMissing(probe func(ctx context.Context, name string) error, h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := probe(r.Context(), r.URL.Path); errors.Is(err, depstorage.ErrNotFound) {
+			http.Error(w, "nothing is stored for that DEP name", http.StatusNotFound)
+			return
+		}
+		h.ServeHTTP(w, r)
+	})
 }
 
 func delHeader(h http.Handler, header string) http.Handler {

@@ -33,6 +33,15 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+// pageSize reads a limit parameter: 100 by default, at most 1000.
+func pageSize(raw string) int {
+	n, _ := strconv.Atoi(raw)
+	if n <= 0 || n > 1000 {
+		return 100
+	}
+	return n
+}
+
 func fail(w http.ResponseWriter, code int, msg string) {
 	writeJSON(w, code, map[string]any{"error": msg})
 }
@@ -108,15 +117,21 @@ func (a *API) Handler() http.Handler {
 		writeJSON(w, 200, res)
 	})
 	mux.HandleFunc("GET /devices/expected", func(w http.ResponseWriter, r *http.Request) {
-		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-		list, err := st.ListExpected(r.Context(), r.URL.Query().Get("after"), limit)
+		q := r.URL.Query()
+		n := pageSize(q.Get("limit"))
+		after := q.Get("cursor")
+		if after == "" {
+			after = q.Get("after") // the older name
+		}
+		list, err := st.ListExpected(r.Context(), after, n+1)
 		if err != nil {
 			fail(w, 500, err.Error())
 			return
 		}
 		next := ""
-		if len(list) > 0 {
-			next = list[len(list)-1].Serial
+		if len(list) > n {
+			list = list[:n]
+			next = list[n-1].Serial
 		}
 		writeJSON(w, 200, map[string]any{"devices": list, "next": next})
 	})
@@ -318,15 +333,16 @@ func (a *API) Handler() http.Handler {
 
 	// ---- devices Apple assigned to this server, known before they enroll ----
 	mux.HandleFunc("GET /dep-devices", func(w http.ResponseWriter, r *http.Request) {
-		n, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-		rows, err := st.ListDEP(r.Context(), r.URL.Query().Get("cursor"), n)
+		n := pageSize(r.URL.Query().Get("limit"))
+		rows, err := st.ListDEP(r.Context(), r.URL.Query().Get("cursor"), n+1)
 		if err != nil {
 			fail(w, 500, err.Error())
 			return
 		}
 		next := ""
-		if len(rows) > 0 && (n <= 0 && len(rows) == 100 || len(rows) == n) {
-			next = rows[len(rows)-1].Serial
+		if len(rows) > n {
+			rows = rows[:n]
+			next = rows[n-1].Serial
 		}
 		writeJSON(w, 200, map[string]any{"devices": rows, "next": next})
 	})
@@ -389,18 +405,16 @@ func (a *API) Handler() http.Handler {
 			fail(w, 422, err.Error())
 			return
 		}
-		n, _ := strconv.Atoi(q.Get("limit"))
-		if n <= 0 || n > 1000 {
-			n = 100
-		}
-		ds, err := st.QueryDevices(r.Context(), x, q.Get("cursor"), n)
+		n := pageSize(q.Get("limit"))
+		ds, err := st.QueryDevices(r.Context(), x, q.Get("cursor"), n+1)
 		if err != nil {
 			fail(w, 500, err.Error())
 			return
 		}
 		next := ""
-		if len(ds) == n {
-			next = ds[len(ds)-1].ID
+		if len(ds) > n {
+			ds = ds[:n]
+			next = ds[n-1].ID
 		}
 		writeJSON(w, 200, map[string]any{"devices": ds, "next": next})
 	})
@@ -423,14 +437,16 @@ func (a *API) Handler() http.Handler {
 			fail(w, 422, err.Error())
 			return
 		}
-		ds, err := st.QueryDevices(r.Context(), x, req.After, req.Limit)
+		n := pageSize(strconv.Itoa(req.Limit))
+		ds, err := st.QueryDevices(r.Context(), x, req.After, n+1)
 		if err != nil {
 			fail(w, 500, err.Error())
 			return
 		}
 		next := ""
-		if l := len(ds); l > 0 && (req.Limit <= 0 && l == 100 || l == req.Limit) {
-			next = ds[l-1].ID
+		if len(ds) > n {
+			ds = ds[:n]
+			next = ds[n-1].ID
 		}
 		writeJSON(w, 200, map[string]any{"devices": ds, "next": next})
 	})

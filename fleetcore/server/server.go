@@ -104,8 +104,11 @@ type Config struct {
 	// AllowRetroactive lets a device that enrolled before certificates were checked be associated with one on its next check-in.
 	AllowRetroactive bool
 
-	// APIKey enables the management API under /v1 (HTTP basic auth, user "fleetcore"); empty disables it unless AdminCA is set.
+	// APIKey enables the management API under /v1 (HTTP basic auth: the password is the key; the user name is ignored); empty disables it unless AdminCA is set.
 	APIKey string
+	// APIKeys are further keys, each named: a call made with one is logged and audited as that name (basic auth password = the key). Give each person or system its own, so revoking one
+	// does not disturb the others and the audit trail says who acted.
+	APIKeys map[string]string
 	// AdminCA, if set, makes the management API require a client certificate that chains to it (mutual TLS: the strongest way for an operator or a control plane to reach a tenant's
 	// server, with no shared secret). With APIKey as well, both are required. The server must terminate TLS itself for this (the certificate is read from the connection).
 	AdminCA *x509.CertPool
@@ -226,7 +229,7 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		cfg.Logger = log.NopLogger
 	}
 	if cfg.CertSource == "" {
-		cfg.CertSource = CertFromSignature
+		cfg.CertSource = CertFromTLS
 	}
 	if cfg.SCEPValidityDays == 0 {
 		cfg.SCEPValidityDays = 365
@@ -514,15 +517,27 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 				}
 				who = leaf.Subject.String()
 			}
-			if cfg.APIKey != "" {
+			if cfg.APIKey != "" || len(cfg.APIKeys) > 0 {
 				_, pass, ok := r.BasicAuth()
-				if !ok || subtle.ConstantTimeCompare([]byte(pass), []byte(cfg.APIKey)) != 1 {
+				name := ""
+				if ok {
+					// every key is compared, so the time taken does not say which one was close
+					if cfg.APIKey != "" && subtle.ConstantTimeCompare([]byte(pass), []byte(cfg.APIKey)) == 1 {
+						name = "api key"
+					}
+					for n, k := range cfg.APIKeys {
+						if subtle.ConstantTimeCompare([]byte(pass), []byte(k)) == 1 {
+							name = "key " + n
+						}
+					}
+				}
+				if name == "" {
 					w.Header().Set("WWW-Authenticate", `Basic realm="fleetcore"`)
 					http.Error(w, "unauthorized", http.StatusUnauthorized)
 					return
 				}
 				if who == "" {
-					who = "api key"
+					who = name
 				}
 			}
 			if actor := r.Header.Get("X-Actor"); actor != "" && who != "" { // a control plane names the person it acts for
@@ -535,7 +550,7 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 
 	// ---- management API ----
 	var depSvc *dep.Service
-	if cfg.APIKey != "" || cfg.AdminCA != nil {
+	if cfg.APIKey != "" || len(cfg.APIKeys) > 0 || cfg.AdminCA != nil {
 		depStore, err := dep.New(ctx, cfg.PKIDB, cfg.PKITenant, cfg.CAPass)
 		if err != nil {
 			return nil, fmt.Errorf("dep storage: %w", err)
@@ -573,7 +588,15 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		httpapi.HandleAPIv1("/v1", apiAuth, logger, cfg.Storage, ps)
 
 		if cfg.Migration {
-			mux.Handle("/v1/migration", adminAuth(httpmdm.CheckinHandler(migrationService, logger.With("handler", "migration"))))
+			migrate := httpmdm.CheckinHandler(migrationService, logger.With("handler", "migration"))
+			mux.Handle("/v1/migration", adminAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPut && r.Method != http.MethodPost {
+					w.Header().Set("Allow", "PUT, POST")
+					http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+					return
+				}
+				migrate.ServeHTTP(w, r)
+			})))
 		}
 
 		// ---- JSON command API ----

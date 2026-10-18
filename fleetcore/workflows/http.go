@@ -42,7 +42,10 @@ func write(w http.ResponseWriter, code int, v any) {
 
 func fail(w http.ResponseWriter, err error) {
 	var u ErrUnavailable
+	var inv ErrInvalid
 	switch {
+	case errors.As(err, &inv):
+		write(w, 422, map[string]any{"error": err.Error()})
 	case errors.As(err, &u):
 		write(w, 422, map[string]any{"error": err.Error()})
 	case errors.Is(err, blueprints.ErrNotFound), errors.Is(err, mongo.ErrNoDocuments):

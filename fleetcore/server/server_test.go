@@ -77,7 +77,7 @@ func TestEnrollEndToEnd(t *testing.T) {
 
 	srv, err := New(ctx, Config{
 		BaseURL: "https://mdm.test", Organization: "Test Org", ProfileIdentifier: "test.mdm.enroll", Topic: "com.apple.mgmt.External.test",
-		Storage: store, PKIDB: mc.Database("fleetcore_test"), PKITenant: "acme", CAPass: "correct horse", CertSource: CertFromTLS, APIKey: "apikey", Version: "test", NoFeeds: true, Sealer: ring.For("acme"), Migration: true,
+		Storage: store, PKIDB: mc.Database("fleetcore_test"), PKITenant: "acme", CAPass: "correct horse", CertSource: CertFromTLS, APIKey: "apikey", Version: "test", NoFeeds: true, Sealer: ring.For("acme"), Migration: true, APIKeys: map[string]string{"alice": "alice-secret-key-123"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -529,6 +529,34 @@ func TestEnrollEndToEnd(t *testing.T) {
 	}
 	if code, b := api("GET", "/v1/devices/expected", ""); code != 200 || !strings.Contains(b, "C02IMP") {
 		t.Errorf("expected devices: %d %.200s", code, b)
+	}
+	// the rough edges: a last page that is exactly full has no next cursor, wrong verbs are refused, missing DEP things are 404, and a named key is its own caller
+	if code, b := api("GET", "/v1/devices/expected?limit=1", ""); code != 200 || !strings.Contains(b, `"next":""`) {
+		t.Errorf("a full last page still offered a next cursor: %d %.200s", code, b)
+	}
+	if code, _ := api("GET", "/v1/enqueue/MIGRATED-1", ""); code != 405 {
+		t.Errorf("enqueue by GET: %d", code)
+	}
+	if code, _ := api("GET", "/v1/migration", ""); code != 405 {
+		t.Errorf("migration by GET: %d", code)
+	}
+	if code, _ := api("GET", "/v1/dep/tokens/nobody", ""); code != 404 {
+		t.Errorf("tokens of an unknown DEP name: %d", code)
+	}
+	if code, _ := api("GET", "/v1/dep/assigner/nobody", ""); code != 404 {
+		t.Errorf("assigner of an unknown DEP name: %d", code)
+	}
+	if code, _ := api("POST", "/v1/dep/profiles/acme", `{"url":"https://x"}`); code != 422 {
+		t.Errorf("a profile with no name: %d", code)
+	}
+	keyed, _ := http.NewRequest("GET", ts.URL+"/v1/dep/names", nil)
+	keyed.SetBasicAuth("whoever", "alice-secret-key-123")
+	if r, err := (&http.Client{Transport: &http.Transport{TLSClientConfig: insecure}}).Do(keyed); err != nil || r.StatusCode != 200 {
+		t.Errorf("a named key was refused: %v", err)
+	}
+	keyed.SetBasicAuth("alice", "alice-secret-key-124")
+	if r, err := (&http.Client{Transport: &http.Transport{TLSClientConfig: insecure}}).Do(keyed); err != nil || r.StatusCode != 401 {
+		t.Errorf("a wrong key was accepted: %v", err)
 	}
 	if code, b := api("GET", "/v1/ddm/translate/coverage", ""); code != 200 || !strings.Contains(b, "com.apple.mail.managed") {
 		t.Errorf("translate coverage: %d %.300s", code, b)

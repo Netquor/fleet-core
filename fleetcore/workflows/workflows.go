@@ -10,7 +10,6 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
-	"errors"
 	"fmt"
 	"math/big"
 	"strings"
@@ -176,7 +175,7 @@ func (s *Service) EnableLostMode(ctx context.Context, device, by string, r LostM
 		return "", err
 	}
 	if r.Message == "" && r.Phone == "" {
-		return "", errors.New("Lost Mode needs a message or a phone number to show")
+		return "", ErrInvalid("Lost Mode needs a message or a phone number to show")
 	}
 	params := map[string]any{}
 	for k, v := range map[string]string{"Message": r.Message, "PhoneNumber": r.Phone, "Footnote": r.Footnote} {
@@ -255,7 +254,7 @@ func (s *Service) RotateFileVault(ctx context.Context, device, by, password stri
 			return "", err
 		}
 		if !ok {
-			return "", errors.New("no recovery key is stored for this Mac: give a password that can unlock FileVault")
+			return "", ErrInvalid("no recovery key is stored for this Mac: give a password that can unlock FileVault")
 		}
 		password = prev
 	}
@@ -438,3 +437,8 @@ func (s *Service) unpack(stored string) ([]byte, error) {
 	}
 	return base64.StdEncoding.DecodeString(string(b))
 }
+
+// ErrInvalid is a request the caller can fix (a missing field): the API answers 422, not 500.
+type ErrInvalid string
+
+func (e ErrInvalid) Error() string { return string(e) }

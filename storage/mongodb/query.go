@@ -74,7 +74,7 @@ func (s *MongoDBStorage) ListEnrollments(ctx context.Context, f EnrollmentFilter
 		}
 		filter = append(filter, bson.E{Key: "id", Value: bson.D{{Key: "$gt", Value: after}}})
 	}
-	cur, err := s.db.Collection(cEnrollments).Find(ctx, s.scope(filter), options.Find().SetSort(bson.D{{Key: "id", Value: 1}}).SetLimit(p.limit()).SetProjection(enrollmentProjection))
+	cur, err := s.db.Collection(cEnrollments).Find(ctx, s.scope(filter), options.Find().SetSort(bson.D{{Key: "id", Value: 1}}).SetLimit(p.limit()+1).SetProjection(enrollmentProjection))
 	if err != nil {
 		return nil, "", err
 	}
@@ -83,7 +83,8 @@ func (s *MongoDBStorage) ListEnrollments(ctx context.Context, f EnrollmentFilter
 		return nil, "", err
 	}
 	next := ""
-	if int64(len(rows)) == p.limit() {
+	if int64(len(rows)) > p.limit() { // one more than a page was read: there is a next page
+		rows = rows[:p.limit()]
 		next = encodeCursor(rows[len(rows)-1].ID)
 	}
 	return rows, next, nil
@@ -169,7 +170,7 @@ func (s *MongoDBStorage) ListQueue(ctx context.Context, f QueueFilter, p Page) (
 		}
 		filter = append(filter, bson.E{Key: "_id", Value: bson.D{{Key: "$gt", Value: oid}}})
 	}
-	cur, err := s.db.Collection(cQueue).Find(ctx, s.scope(filter), options.Find().SetSort(bson.D{{Key: "_id", Value: 1}}).SetLimit(p.limit()))
+	cur, err := s.db.Collection(cQueue).Find(ctx, s.scope(filter), options.Find().SetSort(bson.D{{Key: "_id", Value: 1}}).SetLimit(p.limit()+1))
 	if err != nil {
 		return nil, "", err
 	}
@@ -195,6 +196,10 @@ func (s *MongoDBStorage) ListQueue(ctx context.Context, f QueueFilter, p Page) (
 	if err != nil {
 		return nil, "", err
 	}
+	more := int64(len(docs)) > p.limit()
+	if more {
+		docs = docs[:p.limit()]
+	}
 	out := make([]QueueEntry, len(docs))
 	for i, d := range docs {
 		e := QueueEntry{ID: d.ID, CommandUUID: d.UUID, RequestType: types[d.UUID], Status: "Queued", Active: d.Active, Priority: d.Priority, QueuedAt: d.CreatedAt, NotNowTally: d.Tally}
@@ -208,7 +213,7 @@ func (s *MongoDBStorage) ListQueue(ctx context.Context, f QueueFilter, p Page) (
 		out[i] = e
 	}
 	next := ""
-	if int64(len(docs)) == p.limit() {
+	if more {
 		next = encodeCursor(docs[len(docs)-1].OID.Hex())
 	}
 	return out, next, nil
@@ -295,7 +300,7 @@ func (s *MongoDBStorage) ListCommands(ctx context.Context, requestType string, c
 	if contents {
 		proj = append(proj, bson.E{Key: "command", Value: 1})
 	}
-	cur, err := s.db.Collection(cCommands).Find(ctx, s.scope(filter), options.Find().SetSort(bson.D{{Key: "created_at", Value: -1}, {Key: "_id", Value: -1}}).SetLimit(p.limit()).SetProjection(proj))
+	cur, err := s.db.Collection(cCommands).Find(ctx, s.scope(filter), options.Find().SetSort(bson.D{{Key: "created_at", Value: -1}, {Key: "_id", Value: -1}}).SetLimit(p.limit()+1).SetProjection(proj))
 	if err != nil {
 		return nil, "", err
 	}
@@ -308,6 +313,10 @@ func (s *MongoDBStorage) ListCommands(ctx context.Context, requestType string, c
 	}
 	if err := cur.All(ctx, &rows); err != nil {
 		return nil, "", err
+	}
+	more := int64(len(rows)) > p.limit()
+	if more {
+		rows = rows[:p.limit()]
 	}
 	out := make([]CommandInfo, len(rows))
 	for i, r := range rows {
@@ -323,7 +332,7 @@ func (s *MongoDBStorage) ListCommands(ctx context.Context, requestType string, c
 		}
 	}
 	next := ""
-	if int64(len(rows)) == p.limit() {
+	if more {
 		last := rows[len(rows)-1]
 		next = encodeCursor(last.Created.UTC().Format(time.RFC3339Nano) + "|" + last.ID)
 	}

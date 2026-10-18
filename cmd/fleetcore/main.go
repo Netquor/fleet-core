@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -68,6 +69,16 @@ func main() {
 		relaySec   = flag.String("relay-webhook-secret", env("FLEETCORE_RELAY_WEBHOOK_SECRET", ""), "HMAC secret that signs the webhook body")
 		migration  = flag.Bool("migration", os.Getenv("FLEETCORE_MIGRATION") != "", "accept enrollments from another NanoMDM-family server at /v1/migration (see nano2nano)")
 		migrateCA  = flag.String("migrate-ca", env("FLEETCORE_MIGRATE_CA", ""), "PEM file with the old server's device-identity CA(s); certificates they issued are accepted while devices move")
+		enrollSec  = flag.String("enroll-secret", env("FLEETCORE_ENROLL_SECRET", ""), "code required to download the enrollment profile (?code=, bearer token or basic-auth password)")
+		enrollURL  = flag.String("enroll-auth-url", env("FLEETCORE_ENROLL_AUTH_URL", ""), "forward-auth URL: a 2xx answer to the profile request's headers lets it through")
+		enrollOpen = flag.Bool("enroll-open", os.Getenv("FLEETCORE_ENROLL_OPEN") != "", "let anyone who can reach the server download the enrollment profile")
+		apiKeys    = flag.String("api-keys", env("FLEETCORE_API_KEYS", ""), "further management API keys as name:key,name:key (calls are logged under the name)")
+		sepCheckin = flag.Bool("separate-checkin", os.Getenv("FLEETCORE_SEPARATE_CHECKIN") != "", "serve check-ins at /checkin and commands at /mdm")
+		scepDays   = flag.Int("scep-validity-days", func() int { n, _ := strconv.Atoi(env("FLEETCORE_SCEP_VALIDITY_DAYS", "0")); return n }(), "days a device identity certificate lives (default 365)")
+		challengeT = flag.Duration("challenge-ttl", func() time.Duration { d, _ := time.ParseDuration(env("FLEETCORE_CHALLENGE_TTL", "0")); return d }(), "how long a one-use SCEP challenge works (default 24h)")
+		retroactiv = flag.Bool("allow-retroactive", os.Getenv("FLEETCORE_ALLOW_RETROACTIVE") != "", "let a device that enrolled before certificates were checked be associated with one on its next check-in")
+		webhookURL = flag.String("webhook-url", env("FLEETCORE_WEBHOOK_URL", ""), "post every check-in and command report as a MicroMDM-style event")
+		webhookKey = flag.String("webhook-hmac-key", env("FLEETCORE_WEBHOOK_HMAC_KEY", ""), "HMAC key that signs those events (X-Hmac-Signature)")
 		acmeOn     = flag.Bool("acme", os.Getenv("FLEETCORE_ACME") != "", "serve ACME with Apple device attestation at /acme (hardware-bound device identities)")
 		acmeEnroll = flag.Bool("acme-for-enrollment", os.Getenv("FLEETCORE_ACME_FOR_ENROLLMENT") != "", "enrollment profiles ask for the identity by ACME instead of SCEP (iOS 16, macOS 13.1 or later)")
 		acmeOpen   = flag.Bool("acme-allow-unassigned", os.Getenv("FLEETCORE_ACME_ALLOW_UNASSIGNED") != "", "any genuine Apple device may get a certificate, not only those assigned by Apple Business Manager")
@@ -169,6 +180,20 @@ func main() {
 			fatal(logger, err)
 		}
 	}
+	namedKeys := map[string]string{}
+	for _, pair := range strings.Split(*apiKeys, ",") {
+		if pair = strings.TrimSpace(pair); pair == "" {
+			continue
+		}
+		name, key, ok := strings.Cut(pair, ":")
+		if !ok || name == "" || len(key) < 16 {
+			fatal(logger, errors.New("-api-keys wants name:key pairs, each key at least 16 characters"))
+		}
+		namedKeys[name] = key
+	}
+	if *enrollSec == "" && *enrollURL == "" && !*enrollOpen {
+		logger.Info("msg", "enrollment is closed: set -enroll-secret or -enroll-auth-url, or -enroll-open to let anyone download the profile (ADE and account-driven enrollment are unaffected)")
+	}
 	var uaCfg *server.UserAuthConfig
 	if *uaRealm != "" {
 		uaCfg = &server.UserAuthConfig{Realm: *uaRealm, RequireToken: *uaRequire}
@@ -196,6 +221,7 @@ func main() {
 	srv, err := server.New(ctx, server.Config{
 		BaseURL: *base, Organization: *org, Topic: *topic, Storage: store, PKIDB: mc.Database(*dbName), PKITenant: *tenant,
 		CAPass: *caPass, CertSource: server.CertSource(*source), CertHeader: *header, APIKey: *apiKey, Logger: logger, Debug: *debug, Version: version, NoFeeds: *noFeeds, Sealer: sealer, AdminCA: adminPool, BYOD: byodCfg, MAIDDEPName: *maidDEP, ACME: acmeCfg, UserAuth: uaCfg, Migration: *migration, MigrateCAs: migrateCAs,
+		APIKeys: namedKeys, EnrollAuthorize: enrollAuthorizer(*enrollSec, *enrollURL, *enrollOpen), SeparateCheckin: *sepCheckin, SCEPValidityDays: *scepDays, ChallengeTTL: *challengeT, AllowRetroactive: *retroactiv, WebhookURL: *webhookURL, WebhookHMACKey: *webhookKey,
 	})
 	if err != nil {
 		fatal(logger, err)

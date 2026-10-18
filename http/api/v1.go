@@ -68,10 +68,10 @@ func HandleAPIv1(prefix string, mux Mux, logger log.Logger, store APIStorage, pu
 			prefix+APIEndpointPush,
 			http.StripPrefix( // we strip the prefix to use the path as an id
 				prefix+APIEndpointPush,
-				PushHandler(
+				onlyMethods(PushHandler(
 					pusher,
 					logger.With("handler", handlerName(APIEndpointPush)),
-				),
+				), http.MethodGet, http.MethodPut, http.MethodPost),
 			),
 		)
 	}
@@ -81,11 +81,11 @@ func HandleAPIv1(prefix string, mux Mux, logger log.Logger, store APIStorage, pu
 		prefix+APIEndpointEnqueue,
 		http.StripPrefix( // we strip the prefix to use the path as an id
 			prefix+APIEndpointEnqueue,
-			RawCommandEnqueueHandler(
+			onlyMethods(RawCommandEnqueueHandler(
 				store,
 				pusher,
 				logger.With("handler", handlerName(APIEndpointEnqueue)),
-			),
+			), http.MethodPut, http.MethodPost),
 		),
 	)
 
@@ -94,4 +94,18 @@ func HandleAPIv1(prefix string, mux Mux, logger log.Logger, store APIStorage, pu
 		prefix+APIEndpointEscrowKeyUnlock,
 		NewEscrowKeyUnlockHandler(store, nil, logger.With("handler", handlerName(APIEndpointEscrowKeyUnlock))),
 	)
+}
+
+// onlyMethods answers 405 to any other HTTP method.
+func onlyMethods(h http.Handler, methods ...string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for _, m := range methods {
+			if r.Method == m {
+				h.ServeHTTP(w, r)
+				return
+			}
+		}
+		w.Header().Set("Allow", strings.Join(methods, ", "))
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+	})
 }

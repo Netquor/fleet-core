@@ -237,7 +237,7 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	}
 	schemas.OnChange(func(*schemas.Set) { _ = bpStore.Touch(context.Background(), blueprints.Rule{}) })
 
-	observer := &blueprints.Observer{Store: bpStore, Logger: logger.With("service", "observer")}
+	observer := &blueprints.Observer{Store: bpStore, DDM: ddmStore, Logger: logger.With("service", "observer")}
 	svcs := []service.CheckinAndCommandService{nano, observer}
 	if cfg.WebhookURL != "" {
 		whOpts := []webhook.Option{webhook.WithTokenUpdateTalley(cfg.Storage), webhook.WithEventID(trace.GetTraceID)}
@@ -284,20 +284,22 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		mdmAuth.Handle(endpointMDM, httpmdm.CheckinAndCommandHandler(mdmService, logger.With("handler", "checkin-command")))
 	}
 
-	// Profiles that reach a device as legacy-profile declarations are downloaded here, with the device's identity like any MDM request.
-	mdmAuth.Handle("/ddm/profile/", httpmdm.CertWithEnrollmentIDMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := ddmStore.Profile(r.Context(), httpmdm.GetEnrollmentID(r.Context()), strings.TrimPrefix(r.URL.Path, "/ddm/profile/"))
+	// What declarations point devices at (a legacy profile, an asset's data) is downloaded here, with the device's identity like any MDM request.
+	download := httpmdm.CertWithEnrollmentIDMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		blob, err := ddmStore.GetBlob(r.Context(), httpmdm.GetEnrollmentID(r.Context()), r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:])
 		if err != nil {
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
-		if body == nil {
+		if blob == nil {
 			http.NotFound(w, r)
 			return
 		}
-		w.Header().Set("Content-Type", "application/x-apple-aspen-config")
-		_, _ = w.Write(body)
-	}), certauth.HashCert, cfg.Storage, true, logger.With("handler", "ddm-profile")))
+		w.Header().Set("Content-Type", blob.ContentType)
+		_, _ = w.Write(blob.Body)
+	}), certauth.HashCert, cfg.Storage, true, logger.With("handler", "ddm-download"))
+	mdmAuth.Handle("/ddm/profile/", download)
+	mdmAuth.Handle("/ddm/asset/", download)
 
 	// ---- SCEP and enrollment ----
 	mux.Handle(endpointSCEP, scepHandler)

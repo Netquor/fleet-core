@@ -473,6 +473,39 @@ func (a *API) Handler() http.Handler {
 		}
 		writeJSON(w, 200, map[string]any{"items": items, "applications_by_delivery": counts, "profile_payloads_with_native_declarations": len(equiv)})
 	})
+	// Express a profile as native declarations where Apple has an equivalent. Nothing is saved; the result says what could not be translated.
+	mux.HandleFunc("POST /ddm/translate", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Profile     []byte `json:"profile"`
+			Declaration string `json:"declaration"`
+		}
+		if !decode(w, r, &req) {
+			return
+		}
+		var p struct {
+			PayloadContent []map[string]any
+		}
+		if err := plist.Unmarshal(req.Profile, &p); err != nil {
+			fail(w, 422, "the profile is not a valid property list: "+err.Error())
+			return
+		}
+		type outRow struct {
+			PayloadType string `json:"payload_type"`
+			*ddm.Translation
+			Note string `json:"note,omitempty"`
+		}
+		var out []outRow
+		for _, c := range p.PayloadContent {
+			typ, _ := c["PayloadType"].(string)
+			tr, ok := ddm.Translate(typ, c, req.Declaration, schemas.Current())
+			if !ok {
+				out = append(out, outRow{PayloadType: typ, Note: "no native declaration for this payload type: keep it as a profile (it is delivered as a legacy-profile declaration where the device allows)"})
+				continue
+			}
+			out = append(out, outRow{PayloadType: typ, Translation: tr})
+		}
+		writeJSON(w, 200, map[string]any{"payloads": out})
+	})
 	// From which OS version declarative management, and its software update features, are available, per platform; and every declaration type for one platform.
 	mux.HandleFunc("GET /ddm/support", func(w http.ResponseWriter, r *http.Request) {
 		set := schemas.Current()

@@ -60,10 +60,41 @@ func (b *Blueprint) Prepare() error {
 			}
 		case "declaration":
 			def, ok := schemas.Current().Declaration(it.DeclarationType)
-			if !ok || def.Kind != "configuration" {
-				return fmt.Errorf("item %s: %q is not a declarative management configuration type", it.ID, it.DeclarationType)
+			if !ok || (def.Kind != "configuration" && def.Kind != "management") {
+				return fmt.Errorf("item %s: %q is not a declarative management configuration or management type", it.ID, it.DeclarationType)
+			}
+			if def.Kind == "management" && it.Predicate != "" {
+				return fmt.Errorf("item %s: a management declaration has no activation, so no predicate", it.ID)
 			}
 			if ps := commands.Check(def.Keys, it.Declaration, ""); len(ps) > 0 {
+				return fmt.Errorf("item %s: %s", it.ID, ps[0].Error())
+			}
+			for _, ref := range assetRefs(it.Declaration) {
+				found := false
+				for _, other := range b.Items {
+					found = found || (other.ID == ref && other.Kind == "asset")
+				}
+				if !found {
+					return fmt.Errorf("item %s: refers to asset %q, which is not an asset item of this blueprint", it.ID, ref)
+				}
+			}
+		case "asset":
+			def, ok := schemas.Current().Declaration(it.DeclarationType)
+			if !ok || def.Kind != "asset" {
+				return fmt.Errorf("item %s: %q is not a declarative management asset type", it.ID, it.DeclarationType)
+			}
+			if len(it.AssetData) > 0 {
+				hasRef := false
+				for _, k := range def.Keys {
+					hasRef = hasRef || k.Key == "Reference"
+				}
+				if !hasRef {
+					return fmt.Errorf("item %s: %s carries its values in the declaration, not as data", it.ID, it.DeclarationType)
+				}
+				if it.ContentType == "" {
+					return fmt.Errorf("item %s: content_type is required with asset_data", it.ID)
+				}
+			} else if ps := commands.Check(def.Keys, it.Declaration, ""); len(ps) > 0 {
 				return fmt.Errorf("item %s: %s", it.ID, ps[0].Error())
 			}
 		case "os_update":
@@ -87,7 +118,21 @@ func (b *Blueprint) Prepare() error {
 				return fmt.Errorf("item %s: deadline_hour is 0 to 23", it.ID)
 			}
 		default:
-			return fmt.Errorf("item %s: kind must be profile, command, declaration or os_update", it.ID)
+			return fmt.Errorf("item %s: kind must be profile, command, declaration, asset or os_update", it.ID)
+		}
+		switch it.Scope {
+		case "", "system":
+		case "user":
+			if it.Kind != "declaration" && it.Kind != "asset" && it.Kind != "os_update" {
+				return fmt.Errorf("item %s: only declarative items can be user-scoped", it.ID)
+			}
+		default:
+			return fmt.Errorf("item %s: scope is system or user", it.ID)
+		}
+	}
+	for _, name := range b.StatusItems {
+		if _, ok := schemas.Current().StatusItem(name); !ok {
+			return fmt.Errorf("status_items: %q is not a status item in Apple's schema", name)
 		}
 	}
 	last := 0

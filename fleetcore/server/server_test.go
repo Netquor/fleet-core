@@ -401,19 +401,22 @@ func TestEnrollEndToEnd(t *testing.T) {
 	if code != 200 || !strings.Contains(b, "DeclarationsToken") {
 		t.Fatalf("tokens: %d %s", code, b)
 	}
-	code, b = dm("declaration-items", "")
-	var items struct {
-		Declarations struct {
-			Configurations []struct{ Identifier, ServerToken string }
-		}
-	}
-	_ = json.Unmarshal([]byte(b), &items)
 	var pwToken string
-	for _, c := range items.Declarations.Configurations {
-		if c.Identifier == "fc.pw.passcode" {
-			pwToken = c.ServerToken
+	waitFor("the passcode declaration in the device's items", func() bool {
+		code, b = dm("declaration-items", "")
+		var items struct {
+			Declarations struct {
+				Configurations []struct{ Identifier, ServerToken string }
+			}
 		}
-	}
+		_ = json.Unmarshal([]byte(b), &items)
+		for _, c := range items.Declarations.Configurations {
+			if c.Identifier == "fc.pw.passcode" {
+				pwToken = c.ServerToken
+			}
+		}
+		return pwToken != ""
+	})
 	if code != 200 || pwToken == "" {
 		t.Fatalf("declaration-items: %d %s", code, b)
 	}
@@ -452,6 +455,14 @@ func TestEnrollEndToEnd(t *testing.T) {
 		t.Errorf("an anonymous download got %d", code)
 	}
 
+	pwProfile := `<?xml version="1.0"?><plist version="1.0"><dict><key>PayloadType</key><string>Configuration</string><key>PayloadVersion</key><integer>1</integer><key>PayloadIdentifier</key><string>t.pw</string><key>PayloadUUID</key><string>C</string><key>PayloadContent</key><array><dict><key>PayloadType</key><string>com.apple.mobiledevice.passwordpolicy</string><key>PayloadVersion</key><integer>1</integer><key>PayloadIdentifier</key><string>t.pw.x</string><key>PayloadUUID</key><string>D</string><key>minLength</key><integer>8</integer><key>unknownSetting</key><true/></dict></array></dict></plist>`
+	trBody, _ := json.Marshal(map[string]any{"profile": []byte(pwProfile)})
+	if code, b := api("POST", "/v1/ddm/translate", string(trBody)); code != 200 || !strings.Contains(b, `"MinimumLength":8`) || !strings.Contains(b, "unknownSetting") {
+		t.Errorf("translate: %d %.300s", code, b)
+	}
+	if code, b := api("GET", "/v1/ddm/support", ""); code != 200 || !strings.Contains(b, "software_update") {
+		t.Errorf("support: %d %.200s", code, b)
+	}
 	if code, b := api("GET", "/v1/ddm/coverage", ""); code != 200 || !strings.Contains(b, "com.apple.wifi.managed") || !strings.Contains(b, "applications_by_delivery") {
 		t.Errorf("coverage: %d %.200s", code, b)
 	}

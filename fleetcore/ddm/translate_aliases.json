@@ -1,0 +1,17 @@
+{
+ "com.apple.mobiledevice.passwordpolicy": {
+  "forcePIN": {"to": "RequirePasscode"},
+  "requireAlphanumeric": {"to": "RequireAlphanumericPasscode"},
+  "minLength": {"to": "MinimumLength"},
+  "minComplexChars": {"to": "MinimumComplexCharacters"},
+  "maxFailedAttempts": {"to": "MaximumFailedAttempts"},
+  "minutesUntilFailedLoginReset": {"to": "FailedAttemptsResetInMinutes"},
+  "maxGracePeriod": {"to": "MaximumGracePeriodInMinutes"},
+  "maxInactivity": {"to": "MaximumInactivityInMinutes"},
+  "maxPINAgeInDays": {"to": "MaximumPasscodeAgeInDays"},
+  "pinHistory": {"to": "PasscodeReuseLimit"},
+  "changeAtNextAuth": {"to": "ChangeAtNextAuth"},
+  "customRegex": {"to": "CustomRegex"},
+  "allowSimple": {"to": "RequireComplexPasscode", "invert": true, "approximate": true, "note": "allowSimple false forbids simple passcodes; RequireComplexPasscode is the closest setting"}
+ }
+}

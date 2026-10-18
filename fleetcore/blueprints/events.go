@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/micromdm/nanolib/log"
+	"github.com/micromdm/nanomdm/fleetcore/ddm"
 	"github.com/micromdm/nanomdm/mdm"
 	"github.com/micromdm/nanomdm/service"
 	"github.com/micromdm/plist"
@@ -16,7 +17,9 @@ import (
 // service/multi: it never answers a device, so it cannot change the protocol.
 type Observer struct {
 	service.NopService
-	Store  *Store
+	Store *Store
+	// DDM, if set, lets a user channel that checks out have its declarations cleared at once.
+	DDM    *ddm.Store
 	Logger log.Logger
 	Now    func() time.Time
 }
@@ -56,7 +59,18 @@ func PlatformOf(product string) string {
 	return ""
 }
 
+// userChannel reports whether the request is from a user channel of a device (its enrollment ID has a parent) and records it.
+func (o *Observer) userChannel(r *mdm.Request) (bool, error) {
+	if r.EnrollID == nil || r.ParentID == "" {
+		return false, nil
+	}
+	return true, o.Store.AddUser(r.Context(), r.ParentID, r.ID)
+}
+
 func (o *Observer) Authenticate(r *mdm.Request, m *mdm.Authenticate) error {
+	if ok, err := o.userChannel(r); ok {
+		return err
+	}
 	var info struct {
 		OSVersion   string
 		ProductName string
@@ -74,11 +88,22 @@ func (o *Observer) Authenticate(r *mdm.Request, m *mdm.Authenticate) error {
 }
 
 func (o *Observer) TokenUpdate(r *mdm.Request, m *mdm.TokenUpdate) error {
+	if ok, err := o.userChannel(r); ok {
+		return err
+	}
 	// A device that enrolled before the observer was running (or whose inventory was lost) is created here, and every token update asks for a look.
 	return o.Store.UpsertDevice(r.Context(), DeviceUpdate{ID: r.ID, UDID: m.UDID, EnrollType: r.Type.String()}, o.now())
 }
 
 func (o *Observer) CheckOut(r *mdm.Request, m *mdm.CheckOut) error {
+	if r.EnrollID != nil && r.ParentID != "" {
+		if o.DDM != nil {
+			if _, _, err := o.DDM.Replace(r.Context(), r.ID, nil); err != nil {
+				return err
+			}
+		}
+		return o.Store.RemoveUser(r.Context(), r.ParentID, r.ID)
+	}
 	return o.Store.Deactivate(r.Context(), r.ID)
 }
 

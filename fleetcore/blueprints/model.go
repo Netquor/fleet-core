@@ -31,6 +31,8 @@ type Device struct {
 	EnrolledAt time.Time `bson:"enrolled_at,omitempty" json:"enrolled_at,omitempty"`
 	LastSeen   time.Time `bson:"last_seen,omitempty" json:"last_seen,omitempty"`
 	Active     bool      `bson:"active" json:"active"`
+	// Users are the device's user-channel enrollment IDs (macOS users, Shared iPad), for user-scoped declarations.
+	Users []string `bson:"users,omitempty" json:"users,omitempty"`
 	// Supervised is learned from the device (IsSupervised); nil until known. Many declarations need a supervised device.
 	Supervised *bool `bson:"supervised,omitempty" json:"supervised,omitempty"`
 	// OSQueryAt is when the engine last asked the device for its OS version (DeviceInformation); OSCheckedAt when it last answered.
@@ -79,6 +81,18 @@ type Item struct {
 	DeadlineDays int    `bson:"deadline_days,omitempty" json:"deadline_days,omitempty"`
 	DeadlineHour *int   `bson:"deadline_hour,omitempty" json:"deadline_hour,omitempty"`
 	DetailsURL   string `bson:"details_url,omitempty" json:"details_url,omitempty"`
+
+	// Asset (kind "asset"): data a configuration refers to. DeclarationType is the asset type (com.apple.asset.credential.userpassword...). With AssetData the server hosts the data
+	// and writes the asset's Reference (URL, size, hash) itself; Declaration then holds only the other keys (Authentication, Accessible). Without it, Declaration is the whole payload.
+	// A configuration refers to an asset by writing "$asset:<item id>" where the asset's identifier belongs.
+	AssetData   []byte `bson:"asset_data,omitempty" json:"asset_data,omitempty"`
+	ContentType string `bson:"content_type,omitempty" json:"content_type,omitempty"`
+
+	// Predicate limits a declaration's activation to devices where it is true on the device (Apple's predicate format, for example
+	// @status(device.model.family) == 'iPhone'). The server's own scope (the blueprint's rule) is decided before; this is for what only the device knows.
+	Predicate string `bson:"predicate,omitempty" json:"predicate,omitempty"`
+	// Scope is "system" (the default) or "user": a user-scoped declaration goes to each user channel of the device (macOS users, Shared iPad), not to the device.
+	Scope string `bson:"scope,omitempty" json:"scope,omitempty"`
 	// InstallAction is used only for a device that cannot take declarative enforcement but still understands the MDM ScheduleOSUpdate command (below iOS 17, macOS 14, or
 	// before the command is removed in 27): Default (download and ask the user), DownloadOnly, InstallASAP, NotifyOnly, InstallLater or InstallForceRestart. Default is "Default".
 	InstallAction string `bson:"install_action,omitempty" json:"install_action,omitempty"`
@@ -94,7 +108,9 @@ func (i Item) Hash() string {
 		h.Write(b)
 	}
 	h.Write([]byte(i.Delivery))
-	if i.Kind == "declaration" || i.Kind == "os_update" {
+	h.Write(i.AssetData)
+	h.Write([]byte(i.ContentType + "\x00" + i.Predicate + "\x00" + i.Scope))
+	if i.Kind == "declaration" || i.Kind == "os_update" || i.Kind == "asset" {
 		b, _ := json.Marshal(i.Declaration)
 		h.Write([]byte(i.DeclarationType + "\x00" + string(b) + "\x00" + i.Target + "\x00" + i.DetailsURL + fmt.Sprint(i.NoActivation, i.DeadlineDays)))
 		if i.DeadlineHour != nil {
@@ -123,6 +139,8 @@ type Blueprint struct {
 	Items    []Item `bson:"items" json:"items"`
 	// Rings stage a change over time. None: every device in scope at once.
 	Rings []Ring `bson:"rings,omitempty" json:"rings,omitempty"`
+	// StatusItems are extra status items devices in scope are asked to report over the declarative status channel (names from Apple's schema, for example passcode.is-compliant).
+	StatusItems []string `bson:"status_items,omitempty" json:"status_items,omitempty"`
 	// KeepOnLeave leaves profiles installed when a device leaves the scope or the blueprint is deleted (the default removes them).
 	KeepOnLeave bool `bson:"keep_on_leave,omitempty" json:"keep_on_leave,omitempty"`
 

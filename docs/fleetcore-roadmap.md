@@ -74,6 +74,7 @@ Blueprint item kinds for it:
 - **declaration**: any configuration type from Apple's schema (`com.apple.configuration.passcode.settings`, accounts, VPN, certificates...), validated against the schema when the blueprint is saved, with the activation generated for you.
 - **os_update**: software update enforcement (`softwareupdate.enforcement.specific`). The target comes from Apple's GDMF service, which Apple names as the source for enforcement targets: `latest` is the newest release the device's *hardware* is listed for (an iPhone Apple stops at 26 is moved to 26.7.1, not left failing on 27), `latest-in-major` stays in the device's own major version, or a fixed version. The deadline is `deadline_days` (default 7) after the release was published, or after the item last changed if later, at `deadline_hour` local time. Only what GDMF currently offers is ever targeted, as Apple requires; the enforcement is lifted when the device reports the new version.
 - **profile** with `delivery` `auto` (the default): see below.
+- **asset** and management declarations: see below.
 
 Who can receive what is read from Apple's schema per declaration type: the platform, the OS version it was introduced in, and the enrollment kinds it allows (supervised, user, device). A device that cannot is not failed; its application is `not_applicable` with the reason. Supervision is learned from the device (`IsSupervised`), because Apple allows many declarations, including software update enforcement on a Mac, only on supervised devices.
 
@@ -89,16 +90,22 @@ Who can receive what is read from Apple's schema per declaration type: the platf
 
 The MDM software-update commands are deprecated in 26 and removed in 27, so below the enforcement version a device is updated with `ScheduleOSUpdate` (an `os_update` item falls back to it, honoring `install_action`, only where the schema says the command exists and the device is supervised if it requires that), and from 27 on only declaratively. The per-platform list of every declaration type with its first version and enrollments is `GET /v1/ddm/support?platform=macOS`. A regression test pins these numbers to the schema.
 
-### Declarative management that is still open
+### Declarative management: what is built beyond the basics
 
-- **Assets** (credentials: SCEP, ACME, identity, certificate, user and password; data) and declarations that reference them: needed for certificates and identities delivered declaratively, and for `ProfileAssetReference` (legacy profiles without a URL, 27.0+).
-- **Management properties** (`com.apple.management.properties`) and server capabilities declarations are not sent; organization-info is, from the server's organization name.
-- **User channel and scopes**: declarations go to the system scope. User-scoped declarations (macOS user channel, Shared iPad users) need per-user enrollment IDs in the engine.
-- **Activation predicates** and ordering between declarations: activations are generated one per configuration; a configuration that needs an asset is not yet modeled.
-- **Translating profiles into native declarations** is manual (`/v1/ddm/coverage` shows what has an equivalent).
-- **Status subscriptions** are a fixed core set; making them configurable per blueprint would let a blueprint ask for more (passcode compliance, battery health, FileVault state).
-- **Apply modes**: `single` types (four of them) are de-duplicated by blueprint priority; `combined` types are left to the device, which merges them.
-- **Real devices**: the protocol is tested against recorded behavior and Apple's schema, not against hardware.
+- **Assets**: `asset` items. With `asset_data` the server hosts the bytes (credentials, certificates, any data) at `/ddm/asset/{key}` behind the device's identity, and writes the asset's `Reference` itself, with the URL, size and SHA-256 the device checks. Assets whose values live in the declaration (SCEP, ACME, user identity) take them from `declaration`. A configuration refers to an asset by writing `$asset:<item id>`; it is resolved to the identifier the asset has on the device, checked when the blueprint is saved, and a configuration whose asset does not apply to a device is itself not applicable there.
+- **Legacy profiles as assets**: from OS 27 (where the schema has `ProfileAssetReference`) a profile is delivered as a data asset the device verifies by size and hash; before that, by URL.
+- **Management declarations**: server capabilities and organization info are sent to every device that takes them. A property declaration carries what the server knows that the device does not (its tags and groups), so on-device activation predicates can use them. A `declaration` item may also be any management declaration type.
+- **Activation predicates**: a `declaration` item's `predicate` goes into its activation, for conditions only the device knows. Scope (the blueprint's rule) is still decided on the server first.
+- **User channel**: `scope: user` sends a declaration to each user channel of the device (a macOS user, a Shared iPad user), tracked per user. The schema decides what can go where: for example the CalDAV account on macOS is user-channel only, and the engine says so instead of sending it to the system channel. A user who checks out loses their declarations at once. Status reports from a user channel update that user's record.
+- **Status subscriptions per blueprint**: `status_items` adds status items to what devices in scope report, filtered by the schema for the device's platform, version and enrollment (so passcode compliance is requested on iOS and not on macOS, where it does not exist).
+- **Translating profiles**: `POST /v1/ddm/translate` expresses a profile as native declarations where Apple has an equivalent. Keys match through a table for settings Apple renamed (passcode policy is covered) and by name ignoring case and punctuation; anything else is returned as untranslated, never guessed, and approximate matches say so.
+
+Still open, and honest about it:
+
+- Secrets in assets (passwords, identity data) are stored as given in the blueprint and in the download store. Encrypting them per tenant is part of the hardening list.
+- The translator's alias table covers the passcode policy; other payloads translate only the keys whose names match, and the rest is left for a person.
+- Apple has no ordering between declarations beyond references and activations, so there is none here.
+- Nothing has been tried on real devices: the protocol is tested against Apple's schema and the documented behavior.
 
 ### Retiring profiles
 
@@ -148,4 +155,4 @@ In the current schema, the MDM software-update commands (`ScheduleOSUpdate`, `Av
 5. **Device and enrollment REST APIs**: list/filter devices, enrollments, queue and results over the native BSON documents, with cursors.
 6. **Hardening**: per-tenant encryption of push key, unlock and bootstrap tokens, and identity keys; per-cell database users; a relay from one cluster-level change stream (or outbox) to NATS for events.
 
-Order: DDM assets and native-declaration translators, VPP and apps, user enrollment, device APIs, hardening, blueprints, VPP, device APIs, hardening. ADE and the command API are what make a first real fleet usable.
+Order: VPP and apps, user enrollment, device APIs, hardening, blueprints, VPP, device APIs, hardening. ADE and the command API are what make a first real fleet usable.

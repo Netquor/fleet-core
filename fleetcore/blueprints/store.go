@@ -502,3 +502,29 @@ func (s *Store) DeliveryCounts(ctx context.Context) ([]map[string]any, error) {
 	}
 	return out, nil
 }
+
+// AddUser records a user channel of a device (a macOS user, a Shared iPad user) and makes the device due, so user-scoped items reach it.
+func (s *Store) AddUser(ctx context.Context, parent, user string) error {
+	_, err := s.db.Collection(cDevices).UpdateOne(ctx, bson.D{{Key: "_id", Value: s.key(parent)}},
+		bson.D{{Key: "$addToSet", Value: bson.D{{Key: "users", Value: user}}}, {Key: "$set", Value: bson.D{{Key: "reconcile_at", Value: s.now()}}}})
+	return err
+}
+
+// RemoveUser forgets a user channel that checked out.
+func (s *Store) RemoveUser(ctx context.Context, parent, user string) error {
+	_, err := s.db.Collection(cDevices).UpdateOne(ctx, bson.D{{Key: "_id", Value: s.key(parent)}},
+		bson.D{{Key: "$pull", Value: bson.D{{Key: "users", Value: user}}}, {Key: "$set", Value: bson.D{{Key: "reconcile_at", Value: s.now()}}}})
+	return err
+}
+
+// ParentOf returns the device an enrollment ID is a user channel of; empty if it is not one.
+func (s *Store) ParentOf(ctx context.Context, enrollment string) (string, error) {
+	var d struct {
+		ID string `bson:"id"`
+	}
+	err := s.db.Collection(cDevices).FindOne(ctx, s.scope(bson.D{{Key: "users", Value: enrollment}}), options.FindOne().SetProjection(bson.D{{Key: "id", Value: 1}})).Decode(&d)
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		return "", nil
+	}
+	return d.ID, err
+}

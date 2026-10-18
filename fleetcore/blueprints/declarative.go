@@ -2,6 +2,8 @@ package blueprints
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"time"
@@ -18,6 +20,8 @@ const (
 	typeEnforceSpecific     = "com.apple.configuration.softwareupdate.enforcement.specific"
 	typeLegacy              = "com.apple.configuration.legacy"
 	typeOrgInfo             = "com.apple.management.organization-info"
+	typeCapabilities        = "com.apple.management.server-capabilities"
+	typeProperties          = "com.apple.management.properties"
 )
 
 // statusItems are what every device is asked to report: enough to keep the inventory true, to know what the declarations did, and to follow a software update.
@@ -57,14 +61,19 @@ func declGate(d *Device, declType string) (ok bool, why string) {
 }
 
 // systemDeclarations are on every device that can take them: the status subscription, so the server hears what the device is running and what became of its declarations.
-func systemDeclarations(d *Device, org string) []ddm.Declaration {
+func systemDeclarations(d *Device, org string, extra []string) []ddm.Declaration {
 	if ok, _ := declGate(d, typeStatusSubscriptions); !ok {
 		return nil
 	}
 	set := schemas.Current()
 	os := schemas.SchemaOS(d.Platform)
 	var items []any
-	for _, name := range statusItems {
+	seen := map[string]bool{}
+	for _, name := range append(append([]string(nil), statusItems...), extra...) {
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
 		if def, ok := set.StatusItem(name); ok {
 			info, listed := def.OS[os]
 			if !listed || info.Unsupported() || !info.AllowsEnrollment(d.EnrollKind()) {
@@ -82,6 +91,20 @@ func systemDeclarations(d *Device, org string) []ddm.Declaration {
 		{Identifier: "fc.status", Kind: ddm.KindConfiguration, Type: typeStatusSubscriptions, Payload: map[string]any{"StatusItems": items}, Source: "system"},
 		{Identifier: "fc.status.act", Kind: ddm.KindActivation, Type: typeSimpleActivation, Payload: map[string]any{"StandardConfigurations": []any{"fc.status"}}, Source: "system"},
 	}
+	if ok, _ := declGate(d, typeCapabilities); ok {
+		out = append(out, ddm.Declaration{Identifier: "fc.capabilities", Kind: ddm.KindManagement, Type: typeCapabilities, Payload: map[string]any{"Version": "1.0", "SupportedFeatures": map[string]any{}}, Source: "system"})
+	}
+	// Properties the device can use in activation predicates: what the server knows that the device does not (its tags and groups).
+	if ok, _ := declGate(d, typeProperties); ok {
+		tags, groups := []any{}, []any{}
+		for _, t := range d.Tags {
+			tags = append(tags, t)
+		}
+		for _, g := range d.Groups {
+			groups = append(groups, g)
+		}
+		out = append(out, ddm.Declaration{Identifier: "fc.properties", Kind: ddm.KindManagement, Type: typeProperties, Payload: map[string]any{"tags": tags, "groups": groups}, Source: "system"})
+	}
 	if org != "" {
 		if ok, _ := declGate(d, typeOrgInfo); ok {
 			out = append(out, ddm.Declaration{Identifier: "fc.org", Kind: ddm.KindManagement, Type: typeOrgInfo, Payload: map[string]any{"Name": org}, Source: "system"})
@@ -92,15 +115,147 @@ func systemDeclarations(d *Device, org string) []ddm.Declaration {
 
 func declIdentifier(bp, item string) string { return "fc." + bp + "." + item }
 
-// declarationFor compiles a "declaration" item: the configuration, and the activation that turns it on.
-func declarationFor(bp *Blueprint, it Item) []ddm.Declaration {
-	id := declIdentifier(bp.ID, it.ID)
-	src := bp.ID + "/" + it.ID
-	out := []ddm.Declaration{{Identifier: id, Kind: ddm.KindConfiguration, Type: it.DeclarationType, Payload: it.Declaration, Source: src}}
-	if !it.NoActivation {
-		out = append(out, ddm.Declaration{Identifier: id + ".act", Kind: ddm.KindActivation, Type: typeSimpleActivation, Payload: map[string]any{"StandardConfigurations": []any{id}}, Source: src})
+const assetPrefix = "$asset:"
+
+// assetRefs lists the asset items a payload refers to ("$asset:<item id>" where an asset's identifier belongs).
+func assetRefs(v any) []string {
+	var out []string
+	switch t := v.(type) {
+	case string:
+		if strings.HasPrefix(t, assetPrefix) {
+			out = append(out, strings.TrimPrefix(t, assetPrefix))
+		}
+	case map[string]any:
+		for _, e := range t {
+			out = append(out, assetRefs(e)...)
+		}
+	case []any:
+		for _, e := range t {
+			out = append(out, assetRefs(e)...)
+		}
 	}
 	return out
+}
+
+// resolveAssets replaces each "$asset:<item id>" with the identifier that asset has on the device.
+func resolveAssets(v any, bp string) any {
+	switch t := v.(type) {
+	case string:
+		if strings.HasPrefix(t, assetPrefix) {
+			return declIdentifier(bp, strings.TrimPrefix(t, assetPrefix))
+		}
+		return t
+	case map[string]any:
+		out := make(map[string]any, len(t))
+		for k, e := range t {
+			out[k] = resolveAssets(e, bp)
+		}
+		return out
+	case []any:
+		out := make([]any, len(t))
+		for i, e := range t {
+			out[i] = resolveAssets(e, bp)
+		}
+		return out
+	}
+	return v
+}
+
+// declarationFor compiles a "declaration" item: the configuration (or management declaration), and for a configuration the activation that turns it on.
+// it carries the item's own ID (which names the declaration); src is the application record it belongs to (the same, plus the user for a user-scoped item).
+func declarationFor(bp *Blueprint, it Item, src string) []ddm.Declaration {
+	id := declIdentifier(bp.ID, it.ID)
+	payload, _ := resolveAssets(it.Declaration, bp.ID).(map[string]any)
+	if payload == nil {
+		payload = map[string]any{}
+	}
+	kind := ddm.KindConfiguration
+	if def, ok := schemas.Current().Declaration(it.DeclarationType); ok && def.Kind == "management" {
+		kind = ddm.KindManagement
+	}
+	out := []ddm.Declaration{{Identifier: id, Kind: kind, Type: it.DeclarationType, Payload: payload, Source: bp.ID + "/" + src}}
+	if kind == ddm.KindConfiguration && !it.NoActivation {
+		act := map[string]any{"StandardConfigurations": []any{id}}
+		if it.Predicate != "" {
+			act["Predicate"] = it.Predicate
+		}
+		out = append(out, ddm.Declaration{Identifier: id + ".act", Kind: ddm.KindActivation, Type: typeSimpleActivation, Payload: act, Source: bp.ID + "/" + src})
+	}
+	return out
+}
+
+// assetDeclaration compiles an "asset" item. With data the server hosts it: the asset's Reference points at url and carries the size and hash the device checks.
+func assetDeclaration(bp *Blueprint, it Item, src, url string) ddm.Declaration {
+	payload := map[string]any{}
+	for k, v := range it.Declaration {
+		payload[k] = v
+	}
+	if len(it.AssetData) > 0 {
+		sum := sha256.Sum256(it.AssetData)
+		payload["Reference"] = map[string]any{"DataURL": url, "ContentType": it.ContentType, "Size": int64(len(it.AssetData)), "Hash-SHA-256": hex.EncodeToString(sum[:])}
+	}
+	return ddm.Declaration{Identifier: declIdentifier(bp.ID, it.ID), Kind: ddm.KindAsset, Type: it.DeclarationType, Payload: payload, Source: bp.ID + "/" + src}
+}
+
+// legacyDeclarations wraps a profile as a legacy-profile declaration: the device downloads it from the server (with its device identity, like any MDM request) and installs it as if
+// it had arrived by command, but under declarative management, so it follows the activation and reports status. From OS 27 the profile can be an asset the device checks by size and hash
+// (ProfileAssetReference); before that it is a URL.
+func legacyDeclarations(bp *Blueprint, it Item, src, url string, body []byte, asAsset bool) []ddm.Declaration {
+	id := declIdentifier(bp.ID, it.ID)
+	cfg := map[string]any{"ProfileURL": url}
+	var out []ddm.Declaration
+	if asAsset {
+		sum := sha256.Sum256(body)
+		out = append(out, ddm.Declaration{Identifier: id + ".asset", Kind: ddm.KindAsset, Type: "com.apple.asset.data", Source: bp.ID + "/" + src, Payload: map[string]any{
+			"Reference": map[string]any{"DataURL": url, "ContentType": "application/x-plist", "Size": int64(len(body)), "Hash-SHA-256": hex.EncodeToString(sum[:])}}})
+		cfg = map[string]any{"ProfileAssetReference": id + ".asset"}
+	}
+	return append(out,
+		ddm.Declaration{Identifier: id, Kind: ddm.KindConfiguration, Type: typeLegacy, Payload: cfg, Source: bp.ID + "/" + src},
+		ddm.Declaration{Identifier: id + ".act", Kind: ddm.KindActivation, Type: typeSimpleActivation, Payload: map[string]any{"StandardConfigurations": []any{id}}, Source: bp.ID + "/" + src})
+}
+
+// supportsKey reports whether a declaration's key exists on the device's OS version (a key can be newer than the declaration).
+func supportsKey(d *Device, declType, key string) bool {
+	def, ok := schemas.Current().Declaration(declType)
+	if !ok {
+		return false
+	}
+	os := schemas.SchemaOS(d.Platform)
+	for _, k := range def.Keys {
+		if k.Key != key {
+			continue
+		}
+		info, listed := k.OS[os]
+		if !listed {
+			return true // inherits the declaration's own support
+		}
+		if info.Unsupported() {
+			return false
+		}
+		have, ok1 := schemas.VersionNum(d.OSVersion)
+		need, ok2 := schemas.VersionNum(info.Introduced)
+		return ok1 && ok2 && have >= need
+	}
+	return false
+}
+
+// scopeGate reports whether the declaration can be delivered to the "user" scope on this device's platform.
+func scopeGate(d *Device, declType, scope string) bool {
+	def, ok := schemas.Current().Declaration(declType)
+	if !ok {
+		return true
+	}
+	info, listed := def.OS[schemas.SchemaOS(d.Platform)]
+	if !listed {
+		return false
+	}
+	for _, s := range info.AllowedScopes {
+		if s == scope {
+			return true
+		}
+	}
+	return scope == "system" && len(info.AllowedScopes) == 0
 }
 
 // resolveTarget picks the release an os_update item moves this device to.
@@ -129,7 +284,7 @@ func (e *Engine) resolveTarget(d *Device, it Item) (rel osreleases.Release, foun
 }
 
 // osUpdateFor compiles an "os_update" item for one device. decls is nil when the device needs nothing (already there, or no update is on offer); note says why.
-func (e *Engine) osUpdateFor(d *Device, bp *Blueprint, it Item) (decls []ddm.Declaration, target string, note string, applicable bool) {
+func (e *Engine) osUpdateFor(d *Device, bp *Blueprint, it Item, src string) (decls []ddm.Declaration, target string, note string, applicable bool) {
 	if ok, why := declGate(d, typeEnforceSpecific); !ok {
 		return nil, "", why, false
 	}
@@ -160,16 +315,22 @@ func (e *Engine) osUpdateFor(d *Device, bp *Blueprint, it Item) (decls []ddm.Dec
 		payload["DetailsURL"] = it.DetailsURL
 	}
 	id := declIdentifier(bp.ID, it.ID)
-	src := bp.ID + "/" + it.ID
 	return []ddm.Declaration{
-		{Identifier: id, Kind: ddm.KindConfiguration, Type: typeEnforceSpecific, Payload: payload, Source: src},
-		{Identifier: id + ".act", Kind: ddm.KindActivation, Type: typeSimpleActivation, Payload: map[string]any{"StandardConfigurations": []any{id}}, Source: src},
+		{Identifier: id, Kind: ddm.KindConfiguration, Type: typeEnforceSpecific, Payload: payload, Source: bp.ID + "/" + src},
+		{Identifier: id + ".act", Kind: ddm.KindActivation, Type: typeSimpleActivation, Payload: map[string]any{"StandardConfigurations": []any{id}}, Source: bp.ID + "/" + src},
 	}, rel.Version, "install " + rel.Version + " by " + deadline, true
 }
 
 // OnStatus is the status channel: a device's report brings its inventory up to date and tells how its declarations fared. Connect it to ddm.Service.OnStatus.
-func (e *Engine) OnStatus(ctx context.Context, device string, rep ddm.Report) {
+func (e *Engine) OnStatus(ctx context.Context, enrollment string, rep ddm.Report) {
 	log := e.Logger
+	// A report from a user channel says how its declarations fared; the inventory is the device's, and the records are kept under the device.
+	device := enrollment
+	if parent, err := e.Store.ParentOf(ctx, enrollment); err == nil && parent != "" {
+		device = parent
+		e.recordDeclarationStatus(ctx, device, enrollment, rep)
+		return
+	}
 	fields := bson.D{{Key: "os_checked_at", Value: e.Now()}}
 	touch := false
 	if v := rep.String("device.operating-system.version"); v != "" {
@@ -193,11 +354,17 @@ func (e *Engine) OnStatus(ctx context.Context, device string, rep ddm.Report) {
 	if err := e.Store.SetDeviceFields(ctx, device, fields, touch); err != nil {
 		log.Info("msg", "recording status", "device", device, "err", err)
 	}
+	e.recordDeclarationStatus(ctx, device, enrollment, rep)
+}
+
+// recordDeclarationStatus moves the applications of a channel on from what it reported: device is the device whose records they are, channel the enrollment that reported.
+func (e *Engine) recordDeclarationStatus(ctx context.Context, device, channel string, rep ddm.Report) {
+	log := e.Logger
 	statuses := rep.Declarations()
 	if len(statuses) == 0 || e.DDM == nil {
 		return
 	}
-	sources, err := e.DDM.BySource(ctx, device)
+	sources, err := e.DDM.BySource(ctx, channel)
 	if err != nil {
 		log.Info("msg", "reading declarations", "device", device, "err", err)
 		return
@@ -245,15 +412,4 @@ func reasonText(rs []ddm.Reason) string {
 		return "the device reported the declaration invalid"
 	}
 	return strings.Join(parts, "; ")
-}
-
-// legacyDeclarations wraps a profile as a legacy-profile declaration: the device downloads it from the server (with its device identity, like any MDM request) and installs it as if
-// it had arrived by command, but under declarative management, so it follows the activation and reports status.
-func legacyDeclarations(bp *Blueprint, it Item, profileURL string) []ddm.Declaration {
-	id := declIdentifier(bp.ID, it.ID)
-	src := bp.ID + "/" + it.ID
-	return []ddm.Declaration{
-		{Identifier: id, Kind: ddm.KindConfiguration, Type: typeLegacy, Payload: map[string]any{"ProfileURL": profileURL}, Source: src},
-		{Identifier: id + ".act", Kind: ddm.KindActivation, Type: typeSimpleActivation, Payload: map[string]any{"StandardConfigurations": []any{id}}, Source: src},
-	}
 }

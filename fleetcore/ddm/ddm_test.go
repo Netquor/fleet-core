@@ -7,6 +7,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/micromdm/nanomdm/fleetcore/schemas"
 	"github.com/micromdm/nanomdm/mdm"
 	"github.com/micromdm/nanomdm/service"
 	"go.mongodb.org/mongo-driver/v2/mongo"
@@ -143,4 +144,36 @@ func asStatus(err error, target **service.HTTPStatusError) bool {
 		err = u.Unwrap()
 	}
 	return false
+}
+
+func TestTranslatePasscode(t *testing.T) {
+	tr, ok := Translate("com.apple.mobiledevice.passwordpolicy", map[string]any{
+		"PayloadType": "com.apple.mobiledevice.passwordpolicy", "forcePIN": true, "minLength": 8, "allowSimple": false, "maxInactivity": 5, "somethingNew": "x",
+	}, "", schemas.Embedded())
+	if !ok || tr.Declaration != "com.apple.configuration.passcode.settings" {
+		t.Fatalf("%+v", tr)
+	}
+	want := map[string]any{"RequirePasscode": true, "MinimumLength": 8, "RequireComplexPasscode": true, "MaximumInactivityInMinutes": 5}
+	for k, v := range want {
+		if tr.Payload[k] != v {
+			t.Errorf("%s: got %v want %v", k, tr.Payload[k], v)
+		}
+	}
+	if len(tr.Untranslated) != 1 || tr.Untranslated[0] != "somethingNew" || tr.Approximate["allowSimple"] == "" {
+		t.Errorf("untranslated %v approximate %v", tr.Untranslated, tr.Approximate)
+	}
+	// every key the translation produced is a key of the declaration
+	def, _ := schemas.Embedded().Declaration(tr.Declaration)
+	known := map[string]bool{}
+	for _, k := range def.Keys {
+		known[k.Key] = true
+	}
+	for k := range tr.Payload {
+		if !known[k] {
+			t.Errorf("%s is not a key of %s", k, tr.Declaration)
+		}
+	}
+	if _, ok := Translate("com.example.unknown", nil, "", schemas.Embedded()); ok {
+		t.Error("an unknown payload type was translated")
+	}
 }

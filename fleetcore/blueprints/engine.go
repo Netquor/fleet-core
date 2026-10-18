@@ -202,9 +202,15 @@ type want struct {
 	cfgToken   string
 	// declarative: delivered through declarative management (a declaration, a software update, or a profile wrapped as a legacy-profile declaration).
 	declarative bool
-	profileKey  string // the stored profile body the legacy-profile declaration points at
-	profileBody []byte
-	migrating   bool // a profile already installed by command is being removed before the declaration takes over
+	blobs       []blobSpec // downloads the declarations point at (a legacy profile, an asset's data)
+	needs       []string   // asset items (of the same blueprint) the declarations refer to
+	user        string     // the user channel it goes to; empty for the device itself
+	orig        string     // the item's own ID (it differs from item.ID for a user-scoped item, which has one record per user)
+}
+
+type blobSpec struct {
+	key, contentType string
+	body             []byte
 }
 
 func appKey(bp, item string) string { return bp + "\x1f" + item }
@@ -263,19 +269,32 @@ func (e *Engine) Reconcile(ctx context.Context, d *Device) (time.Time, error) {
 	desiredKeys := map[string]bool{}
 	desiredIdentifiers := map[string]bool{}
 	singleOwner := map[string]string{}
+	extraStatus := map[string]bool{}
 	for _, c := range bps {
 		if !c.scope.Match(d) {
 			continue
 		}
 		bp := c.bp
+		for _, s := range bp.StatusItems {
+			extraStatus[s] = true
+		}
 		at, reaches := eligibleAt(&bp, d.ID)
 		held := !reaches || at.After(now)
 		if reaches && held {
 			soonest(at)
 		}
-		for _, it := range bp.Items {
+		for _, ent := range expandItems(bp.Items, d) {
+			it := ent.it
+			oit := it // the item with its own ID: declaration identifiers come from it
+			oit.ID = ent.orig
 			k := appKey(bp.ID, it.ID)
-			w := &want{bp: &bp, item: it, held: held}
+			w := &want{bp: &bp, item: it, held: held, user: ent.user, orig: ent.orig}
+			if ent.user == noUsers {
+				w.state, w.note, w.hash, w.declarative = StateNA, "this device has no user channel enrolled yet", it.Hash(), true
+				desiredKeys[k] = true
+				wants = append(wants, w)
+				continue
+			}
 			switch it.Kind {
 			case "profile":
 				if desiredIdentifiers[it.Identifier] {
@@ -304,9 +323,16 @@ func (e *Engine) Reconcile(ctx context.Context, d *Device) (time.Time, error) {
 					okBase, whyBase := declGate(d, typeStatusSubscriptions)
 					switch {
 					case okLegacy && okBase:
-						w.declarative, w.profileKey, w.profileBody = true, shortHash(res.Profile), res.Profile
-						w.decls = legacyDeclarations(&bp, it, strings.TrimRight(e.BaseURL, "/")+"/ddm/profile/"+w.profileKey)
-						w.cfgToken = w.decls[0].Token()
+						key := shortHash(res.Profile)
+						asAsset := supportsKey(d, typeLegacy, "ProfileAssetReference")
+						base := strings.TrimRight(e.BaseURL, "/")
+						ct, route := "application/x-apple-aspen-config", "/ddm/profile/"
+						if asAsset {
+							ct, route = "application/x-plist", "/ddm/asset/"
+						}
+						w.declarative, w.blobs = true, []blobSpec{{key, ct, res.Profile}}
+						w.decls = legacyDeclarations(&bp, oit, it.ID, base+route+key, res.Profile, asAsset)
+						w.cfgToken = primaryToken(w.decls)
 						w.hash += "|decl|" + w.cfgToken
 					case it.Delivery == "declarative":
 						if !okLegacy {
@@ -338,26 +364,25 @@ func (e *Engine) Reconcile(ctx context.Context, d *Device) (time.Time, error) {
 					break
 				}
 				w.send, w.uuid = body, uuid
-			case "declaration", "os_update":
+			case "declaration", "os_update", "asset":
 				if e.DDM == nil {
 					w.state, w.note, w.hash = StateNA, "declarative management is not enabled on this server", it.Hash()
 					break
 				}
 				w.hash = it.Hash()
 				w.declarative = true
-				if it.Kind == "os_update" {
+				if it.Kind == "os_update" && ent.user == "" {
 					// Where declarative enforcement is not possible the MDM command still works on an OS that has not removed it.
 					okBase, _ := declGate(d, typeStatusSubscriptions)
 					okEnf, _ := declGate(d, typeEnforceSpecific)
 					if !okBase || !okEnf {
-						cmd, body, uuid, target, note, ok := e.osUpdateCommand(d, it)
+						_, body, uuid, target, note, ok := e.osUpdateCommand(d, it)
 						if !ok && note != "" {
 							_, why := declGate(d, typeEnforceSpecific)
 							w.state, w.note = StateNA, why+"; "+note
 							break
 						}
 						if ok {
-							_ = cmd
 							w.declarative = false
 							w.hash += "|cmd|" + target
 							w.note = note
@@ -373,22 +398,48 @@ func (e *Engine) Reconcile(ctx context.Context, d *Device) (time.Time, error) {
 					w.state, w.note = StateNA, "this device cannot take declarative management: "+why
 					break
 				}
-				if it.Kind == "declaration" {
-					if ok, why := declGate(d, it.DeclarationType); !ok {
-						w.state, w.note = StateNA, why
-						break
-					}
+				declType := it.DeclarationType
+				if it.Kind == "os_update" {
+					declType = typeEnforceSpecific
+				}
+				if ok, why := declGate(d, declType); !ok {
+					w.state, w.note = StateNA, why
+					break
+				}
+				if ent.user != "" && !scopeGate(d, declType, "user") {
+					w.state, w.note = StateNA, declType+" cannot be delivered to a user channel on "+d.Platform
+					break
+				}
+				if ent.user == "" && !scopeGate(d, declType, "system") {
+					w.state, w.note = StateNA, declType+" is delivered to the user channel on "+d.Platform+": make the item user-scoped"
+					break
+				}
+				switch it.Kind {
+				case "declaration":
 					// A type Apple allows only once per device: the higher-priority blueprint's wins (the device would report both invalid otherwise).
-					if def, ok := schemas.Current().Declaration(it.DeclarationType); ok && def.Apply == "single" {
+					if def, ok := schemas.Current().Declaration(it.DeclarationType); ok && def.Apply == "single" && ent.user == "" {
 						if owner, taken := singleOwner[it.DeclarationType]; taken {
 							w.state, w.note = StateNA, "conflicts with "+owner+": the device takes only one "+def.Title+" declaration"
 							break
 						}
 						singleOwner[it.DeclarationType] = bp.ID + "/" + it.ID
 					}
-					w.decls = declarationFor(&bp, it)
-				} else {
-					decls, target, note, applicable := e.osUpdateFor(d, &bp, it)
+					w.needs = assetRefs(it.Declaration)
+					w.decls = declarationFor(&bp, oit, it.ID)
+				case "asset":
+					if len(it.AssetData) > 0 {
+						if e.BaseURL == "" {
+							w.state, w.note = StateNA, "hosting asset data needs the server's public address"
+							break
+						}
+						key := shortHash(it.AssetData)
+						w.blobs = []blobSpec{{key, it.ContentType, it.AssetData}}
+						w.decls = []ddm.Declaration{assetDeclaration(&bp, oit, it.ID, strings.TrimRight(e.BaseURL, "/")+"/ddm/asset/"+key)}
+					} else {
+						w.decls = []ddm.Declaration{assetDeclaration(&bp, oit, it.ID, "")}
+					}
+				default:
+					decls, target, note, applicable := e.osUpdateFor(d, &bp, oit, it.ID)
 					w.hash += "|" + target
 					w.note = note
 					if !applicable {
@@ -400,11 +451,9 @@ func (e *Engine) Reconcile(ctx context.Context, d *Device) (time.Time, error) {
 						w.state = StateApplied // nothing to enforce: the device is where it should be
 					}
 				}
-				for _, dd := range w.decls {
-					if dd.Kind == ddm.KindConfiguration {
-						w.cfgToken = dd.Token()
-						w.hash += "|" + w.cfgToken
-					}
+				if w.state == "" {
+					w.cfgToken = primaryToken(w.decls)
+					w.hash += "|" + w.cfgToken
 				}
 			default:
 				continue
@@ -414,9 +463,20 @@ func (e *Engine) Reconcile(ctx context.Context, d *Device) (time.Time, error) {
 		}
 	}
 
+	// A configuration that refers to an asset the device cannot take is itself not applicable.
+	for _, w := range wants {
+		for _, ref := range w.needs {
+			for _, o := range wants {
+				if o.bp.ID == w.bp.ID && o.orig == ref && o.user == w.user && o.state == StateNA {
+					w.state, w.note, w.decls = StateNA, "needs asset "+ref+", which does not apply here: "+o.note, nil
+				}
+			}
+		}
+	}
+
 	// 2a. declarations: the device's whole set is recomputed and compared with the stored one; only a difference is stored and the device told to sync
 	if e.DDM != nil {
-		if err := e.reconcileDeclarations(ctx, d, wants, have, osCtx, now, soonest); err != nil {
+		if err := e.reconcileDeclarations(ctx, d, wants, have, osCtx, now, soonest, extraStatus); err != nil {
 			return next, err
 		}
 	}
@@ -558,11 +618,69 @@ func ProfileIdentifier(payload []byte) (string, error) {
 	return p.PayloadIdentifier, nil
 }
 
-// reconcileDeclarations stores the device's declaration set, records each declarative item's state, and tells the device to sync when its set changed.
-func (e *Engine) reconcileDeclarations(ctx context.Context, d *Device, wants []*want, have map[string]*Application, osCtx string, now time.Time, soonest func(time.Time)) error {
-	decls := systemDeclarations(d, e.Organization)
-	var keepKeys []string
-	var current []ddm.Declaration
+// noUsers marks a user-scoped item on a device that has no user channel (yet).
+const noUsers = "\x00none"
+
+type itemEntry struct {
+	it   Item
+	user string // the user channel; empty for the device
+	orig string
+}
+
+// expandItems lists the items of a blueprint for one device: a user-scoped item once per user channel of the device (with its own record), the rest once.
+func expandItems(items []Item, d *Device) []itemEntry {
+	var out []itemEntry
+	for _, it := range items {
+		if it.Scope != "user" {
+			out = append(out, itemEntry{it, "", it.ID})
+			continue
+		}
+		if len(d.Users) == 0 {
+			out = append(out, itemEntry{it, noUsers, it.ID})
+			continue
+		}
+		for _, u := range d.Users {
+			c := it
+			c.ID = it.ID + "@" + u
+			out = append(out, itemEntry{c, u, it.ID})
+		}
+	}
+	return out
+}
+
+// primaryToken is the token that identifies what the device must report back as active: the configuration, or the asset or management declaration when there is no configuration.
+func primaryToken(ds []ddm.Declaration) string {
+	for _, k := range []string{ddm.KindConfiguration, ddm.KindAsset, ddm.KindManagement} {
+		for _, d := range ds {
+			if d.Kind == k {
+				return d.Token()
+			}
+		}
+	}
+	return ""
+}
+
+// reconcileDeclarations stores each channel's declaration set (the device's, and each user channel's), records each declarative item's state, and tells a channel to sync when its set changed.
+func (e *Engine) reconcileDeclarations(ctx context.Context, d *Device, wants []*want, have map[string]*Application, osCtx string, now time.Time, soonest func(time.Time), extraStatus map[string]bool) error {
+	var extra []string
+	for s := range extraStatus {
+		extra = append(extra, s)
+	}
+	sort.Strings(extra)
+	sets := map[string][]ddm.Declaration{"": systemDeclarations(d, e.Organization, extra)}
+	for _, u := range d.Users {
+		sets[u] = nil
+	}
+	var current map[string][]ddm.Declaration
+	existing := func(target string) []ddm.Declaration {
+		if current == nil {
+			current = map[string][]ddm.Declaration{}
+		}
+		if _, ok := current[target]; !ok {
+			current[target], _ = e.DDM.List(ctx, targetID(d, target))
+		}
+		return current[target]
+	}
 	for _, w := range wants {
 		if !w.declarative {
 			continue
@@ -597,22 +715,20 @@ func (e *Engine) reconcileDeclarations(ctx context.Context, d *Device, wants []*
 			rec.State = StateApplied
 		case w.held && !sameHash:
 			// Not this device's turn for the change: leave what it has (the previous version of this item's declarations) in place.
-			if current == nil {
-				current, _ = e.DDM.List(ctx, d.ID)
-			}
-			for _, c := range current {
+			for _, c := range existing(w.user) {
 				if c.Source == w.bp.ID+"/"+w.item.ID {
-					decls = append(decls, c)
+					sets[w.user] = append(sets[w.user], c)
 				}
 			}
 			continue
 		default:
-			decls = append(decls, w.decls...)
-			if w.profileKey != "" {
-				if err := e.DDM.PutProfile(ctx, d.ID, w.profileKey, w.profileBody); err != nil {
-					return err
+			sets[w.user] = append(sets[w.user], w.decls...)
+			if !sameHash || a.State == StateNA {
+				for _, b := range w.blobs {
+					if err := e.DDM.PutBlob(ctx, d.ID, b.key, b.contentType, b.body); err != nil {
+						return err
+					}
 				}
-				keepKeys = append(keepKeys, w.profileKey)
 			}
 			rec.State = StatePending
 			if sameHash {
@@ -625,23 +741,61 @@ func (e *Engine) reconcileDeclarations(ctx context.Context, d *Device, wants []*
 			}
 		}
 	}
-	changed, st, err := e.DDM.Replace(ctx, d.ID, decls)
+
+	// Downloads still referred to by a declaration of this device stay available; the rest go.
+	var keep []string
+	for _, ds := range sets {
+		for _, c := range ds {
+			collectDownloadKeys(c.Payload, &keep)
+		}
+	}
+	if err := e.DDM.PruneProfiles(ctx, d.ID, keep); err != nil {
+		return err
+	}
+
+	for target, decls := range sets {
+		if err := e.syncChannel(ctx, d, target, decls, now, soonest); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// targetID is the enrollment ID of a channel: the device's, or the user channel's.
+func targetID(d *Device, target string) string {
+	if target == "" {
+		return d.ID
+	}
+	return target
+}
+
+// collectDownloadKeys finds the keys of server-hosted downloads referred to in a payload (URLs under /ddm/).
+func collectDownloadKeys(v any, keys *[]string) {
+	switch t := v.(type) {
+	case string:
+		if i := strings.Index(t, "/ddm/"); i >= 0 && strings.HasPrefix(t, "https://") {
+			*keys = append(*keys, t[strings.LastIndex(t, "/")+1:])
+		}
+	case map[string]any:
+		for _, e := range t {
+			collectDownloadKeys(e, keys)
+		}
+	case []any:
+		for _, e := range t {
+			collectDownloadKeys(e, keys)
+		}
+	}
+}
+
+// syncChannel makes one channel's stored set exactly decls and, if it changed, tells that enrollment to sync.
+func (e *Engine) syncChannel(ctx context.Context, d *Device, target string, decls []ddm.Declaration, now time.Time, soonest func(time.Time)) error {
+	id := targetID(d, target)
+	changed, st, err := e.DDM.Replace(ctx, id, decls)
 	if err != nil {
 		return err
 	}
-	// Profiles still referenced by a declaration of the device stay downloadable; others go.
-	for _, c := range decls {
-		if c.Type == typeLegacy {
-			if u, _ := c.Payload["ProfileURL"].(string); u != "" {
-				keepKeys = append(keepKeys, u[strings.LastIndex(u, "/")+1:])
-			}
-		}
-	}
-	if err := e.DDM.PruneProfiles(ctx, d.ID, keepKeys); err != nil {
-		return err
-	}
 	if len(decls) == 0 && st.Token == "" {
-		return nil // never had any: nothing to tell the device
+		return nil // never had any: nothing to tell it
 	}
 	needNudge := changed || st.NotifiedToken != st.Token || (st.SyncedToken != st.Token && now.Sub(st.NotifiedAt) >= e.Cfg.PendingTimeout)
 	if !needNudge {
@@ -650,18 +804,18 @@ func (e *Engine) reconcileDeclarations(ctx context.Context, d *Device, wants []*
 		}
 		return nil
 	}
-	// The command carries the tokens (Apple allows this), so a device that is already current skips its first round trip.
+	// The command carries the tokens (Apple allows this), so a channel that is already current skips its first round trip.
 	tokens, _ := json.Marshal(map[string]any{"SyncTokens": map[string]any{"DeclarationsToken": st.Token, "Timestamp": st.UpdatedAt.UTC().Format(time.RFC3339)}})
 	cmd, _ := commandsGet("DeclarativeManagement")
 	body, _, ps := commands.Build(cmd, map[string]any{"Data": base64.StdEncoding.EncodeToString(tokens)}, commands.Options{Platform: d.Platform, OSVersion: d.OSVersion})
 	if len(ps) > 0 {
 		return errors.New(ps[0].Error())
 	}
-	if err := e.Enq.Enqueue(ctx, []string{d.ID}, body); err != nil {
-		return fmt.Errorf("telling the device to sync declarations: %w", err)
+	if err := e.Enq.Enqueue(ctx, []string{id}, body); err != nil {
+		return fmt.Errorf("telling %s to sync declarations: %w", id, err)
 	}
 	soonest(now.Add(e.Cfg.PendingTimeout))
-	return e.DDM.Notified(ctx, d.ID, st.Token)
+	return e.DDM.Notified(ctx, id, st.Token)
 }
 
 // osUpdateCommand is the MDM fallback for a software update: a ScheduleOSUpdate command, for a device that cannot take declarative enforcement yet still has the command.

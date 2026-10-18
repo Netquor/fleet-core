@@ -8,6 +8,7 @@ import (
 	"github.com/micromdm/nanomdm/fleetcore/ddm"
 	"github.com/micromdm/nanomdm/fleetcore/osreleases"
 	"github.com/micromdm/nanomdm/fleetcore/schemas"
+	"github.com/micromdm/nanomdm/mdm"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -418,5 +419,153 @@ func TestOrganizationInfoIsSent(t *testing.T) {
 	f.reconcile()
 	if d := f.declsOf("mac")["fc.org"]; d.Kind != ddm.KindManagement || d.Payload["Name"] != "Acme Co" {
 		t.Errorf("%+v", d)
+	}
+}
+
+func TestAssetsAreHostedAndReferenced(t *testing.T) {
+	f := newFixture(t)
+	f.eng.BaseURL = "https://mdm.example.com"
+	f.device("phone", "iOS", "18.2")
+	f.supervised("phone", true)
+	creds := []byte(`{"Username":"u","Password":"p"}`)
+	bp := Blueprint{ID: "cal", Enabled: true, Items: []Item{
+		{ID: "pw", Kind: "asset", DeclarationType: "com.apple.asset.credential.userpassword", AssetData: creds, ContentType: "application/json"},
+		{ID: "acct", Kind: "declaration", DeclarationType: "com.apple.configuration.account.caldav", Declaration: map[string]any{"HostName": "cal.example.com", "AuthenticationCredentialsAssetReference": "$asset:pw"}, Predicate: "@status(device.model.family) == 'iPhone'"},
+	}}
+	f.save(bp)
+	f.reconcile()
+	d := f.declsOf("phone")
+	asset, cfg := d["fc.cal.pw"], d["fc.cal.acct"]
+	ref, _ := asset.Payload["Reference"].(map[string]any)
+	if asset.Kind != ddm.KindAsset || ref == nil || ref["Size"] != float64(len(creds)) || ref["ContentType"] != "application/json" || len(ref["Hash-SHA-256"].(string)) != 64 {
+		t.Fatalf("asset: %+v", asset)
+	}
+	if cfg.Payload["AuthenticationCredentialsAssetReference"] != "fc.cal.pw" {
+		t.Errorf("the reference was not resolved: %v", cfg.Payload)
+	}
+	if act := d["fc.cal.acct.act"]; act.Payload["Predicate"] != "@status(device.model.family) == 'iPhone'" {
+		t.Errorf("the predicate did not reach the activation: %v", act.Payload)
+	}
+	if _, ok := d["fc.cal.pw.act"]; ok {
+		t.Error("an asset needs no activation")
+	}
+	url := ref["DataURL"].(string)
+	blob, _ := f.ddm.GetBlob(f.ctx, "phone", url[strings.LastIndex(url, "/")+1:])
+	if blob == nil || string(blob.Body) != string(creds) || blob.ContentType != "application/json" {
+		t.Errorf("the asset data is not served: %+v", blob)
+	}
+	// An item that refers to an asset the blueprint does not have is refused when saved.
+	bad := Blueprint{ID: "bad", Items: []Item{{ID: "acct", Kind: "declaration", DeclarationType: "com.apple.configuration.account.caldav", Declaration: map[string]any{"HostName": "x", "AuthenticationCredentialsAssetReference": "$asset:missing"}}}}
+	if err := bad.Prepare(); err == nil {
+		t.Error("a reference to a missing asset was accepted")
+	}
+}
+
+func TestUserScopedDeclarations(t *testing.T) {
+	f := newFixture(t)
+	f.device("mac", "macOS", "15.0")
+	f.supervised("mac", true)
+	f.store.AddUser(f.ctx, "mac", "mac:alice")
+	f.store.AddUser(f.ctx, "mac", "mac:bob")
+	item := Item{ID: "cal", Kind: "declaration", DeclarationType: "com.apple.configuration.account.caldav", Declaration: map[string]any{"HostName": "cal.example.com"}}
+	// On macOS this account type is delivered to the user channel only.
+	f.save(Blueprint{ID: "sys", Enabled: true, Items: []Item{item}})
+	f.reconcile()
+	if a := appFor(f, "mac", "cal"); a.State != StateNA || !strings.Contains(a.Note, "user-scoped") {
+		t.Errorf("system scope on macOS: %+v", a)
+	}
+	user := item
+	user.Scope = "user"
+	f.save(Blueprint{ID: "usr", Enabled: true, Items: []Item{user}})
+	f.reconcile()
+	for _, u := range []string{"mac:alice", "mac:bob"} {
+		d := f.declsOf(u)["fc.usr.cal"]
+		if d.Type != "com.apple.configuration.account.caldav" || d.Source != "usr/cal@"+u {
+			t.Errorf("%s: %+v", u, d)
+		}
+		if a := appFor(f, "mac", "cal@"+u); a.State != StatePending {
+			t.Errorf("%s record: %+v", u, a)
+		}
+	}
+	if _, ok := f.declsOf("mac")["fc.usr.cal"]; ok {
+		t.Error("a user-scoped declaration went to the device channel")
+	}
+	// each user channel is told to sync, not the device for it
+	told := map[string]bool{}
+	for _, s := range f.enq.take() {
+		if s.requestType() == "DeclarativeManagement" {
+			told[s.ids[0]] = true
+		}
+	}
+	if !told["mac:alice"] || !told["mac:bob"] {
+		t.Errorf("user channels not told to sync: %v", told)
+	}
+	// A report from a user channel updates that user's record.
+	tok := f.declsOf("mac:alice")["fc.usr.cal"].Token()
+	f.eng.OnStatus(f.ctx, "mac:alice", ddm.Report{StatusItems: map[string]rawJSON{"management.declarations": rawJSON(declStatus("fc.usr.cal", tok, "valid", true, nil))}})
+	if a := appFor(f, "mac", "cal@mac:alice"); a.State != StateApplied {
+		t.Errorf("alice: %+v", a)
+	}
+	if a := appFor(f, "mac", "cal@mac:bob"); a.State != StatePending {
+		t.Errorf("bob must stay pending: %+v", a)
+	}
+	// A user who leaves loses the declaration.
+	leave := mdm.NewRequestWithContext(f.ctx, nil)
+	leave.EnrollID = &mdm.EnrollID{ID: "mac:bob", ParentID: "mac", Type: mdm.User}
+	f.obs.DDM = f.ddm
+	if err := f.obs.CheckOut(leave, &mdm.CheckOut{}); err != nil {
+		t.Fatal(err)
+	}
+	f.reconcile()
+	if len(f.declsOf("mac:bob")) != 0 {
+		t.Error("a user who left still has declarations")
+	}
+}
+
+func TestLegacyProfileAsAssetOn27AndStatusExtras(t *testing.T) {
+	f := newFixture(t)
+	f.eng.BaseURL = "https://mdm.example.com"
+	f.device("new", "macOS", "27.0.1")
+	f.supervised("new", true)
+	f.device("old", "macOS", "15.0")
+	f.supervised("old", true)
+	f.store.SetDeviceFields(f.ctx, "old", bson.D{{Key: "tags", Value: []string{"eng"}}, {Key: "groups", Value: []string{"Engineering"}}}, true)
+	f.save(Blueprint{ID: "wifi", Enabled: true, StatusItems: []string{"diskmanagement.filevault.enabled", "passcode.is-compliant"}, Items: []Item{{ID: "wifi", Kind: "profile", Payload: wifiProfile("corp")}}})
+	f.reconcile()
+
+	d := f.declsOf("new")
+	cfg, asset := d["fc.wifi.wifi"], d["fc.wifi.wifi.asset"]
+	if cfg.Payload["ProfileAssetReference"] != "fc.wifi.wifi.asset" || cfg.Payload["ProfileURL"] != nil {
+		t.Errorf("on 27 the profile is an asset reference: %v", cfg.Payload)
+	}
+	ref, _ := asset.Payload["Reference"].(map[string]any)
+	if asset.Type != "com.apple.asset.data" || ref["ContentType"] != "application/x-plist" || ref["Hash-SHA-256"] == nil {
+		t.Errorf("asset: %+v", asset)
+	}
+	if old := f.declsOf("old")["fc.wifi.wifi"]; old.Payload["ProfileURL"] == nil || old.Payload["ProfileAssetReference"] != nil {
+		t.Errorf("before 27 it is a URL: %v", old.Payload)
+	}
+	// the blueprint's extra status item is subscribed, and the server's properties and capabilities are sent
+	var names []string
+	for _, it := range f.declsOf("old")["fc.status"].Payload["StatusItems"].([]any) {
+		names = append(names, it.(map[string]any)["Name"].(string))
+	}
+	joined := strings.Join(names, " ")
+	if !strings.Contains(joined, "diskmanagement.filevault.enabled") {
+		t.Errorf("the blueprint's status item is not subscribed: %v", names)
+	}
+	if strings.Contains(joined, "passcode.is-compliant") {
+		t.Errorf("a status item that does not exist on macOS was subscribed: %v", names)
+	}
+	props := f.declsOf("old")["fc.properties"]
+	if props.Kind != ddm.KindManagement || props.Payload["tags"].([]any)[0] != "eng" || props.Payload["groups"].([]any)[0] != "Engineering" {
+		t.Errorf("properties: %+v", props)
+	}
+	if c := f.declsOf("old")["fc.capabilities"]; c.Payload["Version"] != "1.0" {
+		t.Errorf("capabilities: %+v", c)
+	}
+	// an unknown status item is refused when saving
+	if err := (&Blueprint{ID: "x", StatusItems: []string{"no.such.item"}}).Prepare(); err == nil {
+		t.Error("an unknown status item was accepted")
 	}
 }

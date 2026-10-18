@@ -15,6 +15,10 @@ github.com/go-sql-driver/mysql v1.8.1 h1:LedoTUt/eveggdHS9qUFC1EFSa8bU2+1pZjSRpv
 github.com/go-sql-driver/mysql v1.8.1/go.mod h1:wEBSXgmK//2ZFJyE+qWnIsVGmvmEKlqwuVSjsCm7DZg=
 github.com/go-stack/stack v1.6.0 h1:MmJCxYVKTJ0SplGKqFVX3SBnmaUhODHZrrFF6jMbpZk=
 github.com/go-stack/stack v1.6.0/go.mod h1:v0f6uXyyMGvRgIKkXu+yp6POWl0qKG85gN/melR3HDY=
+github.com/golang-jwt/jwt/v5 v5.0.0 h1:1n1XNM9hk7O9mnQoNBGolZvzebBQ7p93ULHRc28XJUE=
+github.com/golang-jwt/jwt/v5 v5.0.0/go.mod h1:pqrtFR0X4osieyHYxtmOUWsAWrfe1Q5UVIyoH402zdk=
+github.com/gomodule/oauth1 v0.2.0 h1:/nNHAD99yipOEspQFbAnNmwGTZ1UNXiD/+JLxwx79fo=
+github.com/gomodule/oauth1 v0.2.0/go.mod h1:4r/a8/3RkhMBxJQWL5qzbOEcaQmNPIkNoI7P8sXeI08=
 github.com/google/btree v1.0.0 h1:0udJVsspx3VBr5FwtLhQQtuAsVc79tTq0ocGIPAU6qo=
 github.com/google/btree v1.0.0/go.mod h1:lNA+9X1NB3Zf8V7Ke586lFgjr2dZNuvo3lPJSGZ5JPQ=
 github.com/google/go-cmp v0.6.0/go.mod h1:17dUlkBOakJ0+DkrSSNjCkIjxS6bF9zb3elmeNGIjoY=
@@ -30,6 +34,8 @@ github.com/klauspost/compress v1.19.2 h1:hMRETovs/pu/dVWN7zIT1PGG8t509MwT6bO7XSi
 github.com/klauspost/compress v1.19.2/go.mod h1:cwPg85FWrGar70rWktvGQj8/hthj3wpl0PGDogxkrSQ=
 github.com/lib/pq v1.10.9 h1:YXG7RB+JIjhP29X+OtkiDnYaXQwpS4JEWq7dtCCRUEw=
 github.com/lib/pq v1.10.9/go.mod h1:AlVN5x4E4T544tWzH6hKfbfQvm3HdbOxrmggDNAPY9o=
+github.com/micromdm/nanodep v0.7.0 h1:ZoRjCxDu/oPDj0ILDfPwnoIlO8W/1/RMRvB3X38gZtU=
+github.com/micromdm/nanodep v0.7.0/go.mod h1:yu1qyz1sRE9qPD7FkuzWTuQp2FVrECwdYyMZ3zHOJOI=
 github.com/micromdm/nanolib v0.5.2 h1:+olcK/5uBu6Boi9CJ8DyL+L0IZtqJomGWPQm36zjhgI=
 github.com/micromdm/nanolib v0.5.2/go.mod h1:FwBKCvvphgYvbdUZ+qw5kay7NHJcg6zPi8W7kXNajmE=
 github.com/micromdm/plist v0.3.0 h1:a7G9K92jBnY4k202TqlTropTXrYTLJEGV9Ks5AN0LpU=

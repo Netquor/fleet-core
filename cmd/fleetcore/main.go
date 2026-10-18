@@ -85,6 +85,11 @@ func main() {
 		fatal(logger, err)
 	}
 
+	go func() {
+		if err := srv.Run(ctx); err != nil {
+			logger.Info("msg", "background work stopped", "err", err)
+		}
+	}()
 	hs := &http.Server{Addr: *listen, Handler: srv.Handler, ReadHeaderTimeout: 15 * time.Second}
 	var serve func() error
 	switch {

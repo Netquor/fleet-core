@@ -19,6 +19,7 @@ import (
 	"github.com/micromdm/nanolib/log"
 	"github.com/micromdm/nanomdm/certverify"
 	"github.com/micromdm/nanomdm/cryptoutil"
+	"github.com/micromdm/nanomdm/fleetcore/dep"
 	"github.com/micromdm/nanomdm/fleetcore/enroll"
 	"github.com/micromdm/nanomdm/fleetcore/pki"
 	httpapi "github.com/micromdm/nanomdm/http/api"
@@ -102,7 +103,9 @@ type Server struct {
 	// CAPool holds the device-identity CA: the roots a client certificate is checked against, and what a TLS listener offers as acceptable client CAs.
 	CAPool *x509.CertPool
 	Depot  *pki.MongoDepot
-	cfg    Config
+	// DEP is Automated Device Enrollment (nil without an API key). Call Run to start its syncers.
+	DEP *dep.Service
+	cfg Config
 }
 
 const (
@@ -236,7 +239,17 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	mux.HandleFunc("/version", nlhttp.NewJSONVersionHandler(cfg.Version))
 
 	// ---- management API ----
+	var depSvc *dep.Service
 	if cfg.APIKey != "" {
+		depStore, err := dep.New(ctx, cfg.PKIDB, cfg.PKITenant, cfg.CAPass)
+		if err != nil {
+			return nil, fmt.Errorf("dep storage: %w", err)
+		}
+		if depSvc, err = dep.NewService(ctx, cfg.PKIDB, depStore, cfg.PKITenant, logger.With("service", "dep")); err != nil {
+			return nil, fmt.Errorf("dep service: %w", err)
+		}
+		mux.Handle("/v1/dep/", nlhttp.NewSimpleBasicAuthHandler(depSvc.Handler("/v1/dep"), "fleetcore", cfg.APIKey, "fleetcore"))
+
 		apiAuth := nlhttp.NewMWMux(mux)
 		apiAuth.Use(func(h http.Handler) http.Handler {
 			return nlhttp.NewSimpleBasicAuthHandler(h, "fleetcore", cfg.APIKey, "fleetcore")
@@ -249,7 +262,7 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		httpapi.HandleAPIv1("/v1", apiAuth, logger, cfg.Storage, ps)
 	}
 
-	return &Server{Handler: trace.NewTraceLoggingHandler(mux, logger.With("handler", "log"), newTraceID), CAPool: pool, Depot: depot, cfg: cfg}, nil
+	return &Server{Handler: trace.NewTraceLoggingHandler(mux, logger.With("handler", "log"), newTraceID), CAPool: pool, Depot: depot, DEP: depSvc, cfg: cfg}, nil
 }
 
 // TLSConfig for a listener that terminates TLS here: the given certificate (a public one devices trust), and a request for a client certificate, which is checked by the MDM handlers
@@ -270,4 +283,13 @@ func newTraceID(_ *http.Request) string {
 		_, _ = f.Read(b)
 	}
 	return fmt.Sprintf("%x", b)
+}
+
+// Run starts the background work (the DEP syncers) and returns when ctx ends.
+func (s *Server) Run(ctx context.Context) error {
+	if s.DEP == nil {
+		<-ctx.Done()
+		return nil
+	}
+	return s.DEP.Run(ctx)
 }

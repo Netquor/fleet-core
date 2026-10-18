@@ -320,3 +320,7 @@ func open(s, pass string) ([]byte, error) {
 	}
 	return nil, errors.New("unknown key format")
 }
+
+// Seal and Open protect secrets kept beside the CA (DEP tokens, keys) with the same passphrase scheme as the CA key.
+func Seal(b []byte, pass string) (string, error) { return seal(b, pass) }
+func Open(s, pass string) ([]byte, error)        { return open(s, pass) }

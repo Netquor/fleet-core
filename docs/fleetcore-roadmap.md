@@ -103,7 +103,7 @@ The MDM software-update commands are deprecated in 26 and removed in 27, so belo
 Still open, and honest about it:
 
 - Secrets in assets (passwords, identity data) are stored as given in the blueprint and in the download store. Encrypting them per tenant is part of the hardening list.
-- The translator's alias table covers the passcode policy; other payloads translate only the keys whose names match, and the rest is left for a person.
+- The translator covers the common payloads (see the coverage report) but not VPN, certificates, SCEP and ACME payloads (those need assets built by hand), and most of the restrictions payload, whose settings have no declaration yet.
 - Apple has no ordering between declarations beyond references and activations, so there is none here.
 - Nothing has been tried on real devices: the protocol is tested against Apple's schema and the documented behavior.
 
@@ -133,26 +133,25 @@ In the current schema, the MDM software-update commands (`ScheduleOSUpdate`, `Av
 | --- | --- |
 | MDM protocol, check-in, push (APNs), command queue | built (NanoMDM) |
 | SCEP identity, enrollment profile, TLS | built |
-| ADE (Automated Device Enrollment) | built: tokens, sync, assigner, devices; follow-up: await-configuration flow, skip-pane profiles through the proxy |
+| ADE (Automated Device Enrollment) | built: tokens, sync, assigner, devices, typed profile definition (skipped panes), signed device request (no challenge for a known device), await configuration, device-assigned events into blueprints |
 | Commands and responses | built: JSON API over all of Apple's commands, validated against the current schema |
 | Configuration profiles per platform | built (applicability) |
 | Blueprints, groups, staged rollout, drift repair | built |
 | OS currency and update enforcement | feed and out-of-date rules built; enforcement needs DDM |
 | Declarative device management: configurations, activations, status channel, software update enforcement, legacy-profile delivery | built; assets (credentials, data) and management properties are not yet blueprint items |
-| Apps: VPP / Apps and Books licensing, `InstallApplication`, managed app config | planned |
-| User Enrollment and Account-Driven enrollment (Managed Apple Accounts, BYOD) | planned: `GetToken`, UserAuthenticate, the enrollment-type rules in the schemas (`user_enrollment: forbidden`) |
-| Managed Device Attestation (ACME), Platform SSO | planned |
-| Lost Mode, Activation Lock bypass, Rotate FileVault key, Bootstrap token, Recovery lock | commands are available through the API; no workflows |
+| Apps: VPP / Apps and Books licensing, `InstallApplication`, managed app config | built: device-based licensing, app items, `app.managed` declaration, installed-app inventory |
+| User Enrollment and Account-Driven enrollment (Managed Apple Accounts, BYOD) | built: discovery, OIDC sign-in, `GetToken`, enrollment-type rules from the schemas; `UserAuthenticate` is minimal |
+| Managed Device Attestation (ACME), Platform SSO | built: ACME `device-attest-01` server and enrollment option; Platform SSO as a blueprint item (macOS) |
+| Lost Mode, Activation Lock bypass, Rotate FileVault key, Bootstrap token, Recovery lock | built as workflows with a sealed, audited secret vault |
 | Content caching, extensions, certificates | commands available |
-| Supervision and channel awareness (device vs user channel) | recorded in the schemas; the engine does not yet use `supervised` or `user_enrollment` to decide |
+| Supervision and channel awareness (device vs user channel) | used by the engine: supervision, enrollment type and channel decide what is sent |
 
-## Planned
+## Remaining
 
-1. **ADE follow-ups**: an ADE enrollment path that skips the one-use challenge when the device is known from DEP (serial match), and device-assigned events for blueprints.
-2. **VPP**: a client for the Apple Business `vpp/v1` API (tokens per tenant, assets, assignments, licenses) with `InstallApplication` commands built from assignments.
-3. **Declarative device management**: declarations as blueprint items, with software update enforcement; status-driven drift detection.
-4. **JSON command API**: `POST /v1/commands` takes JSON, validates against the Apple device-management schemas (port `schemas.ts` as generated Go types), turns it into a plist command and enqueues it.
-5. **Device and enrollment REST APIs**: list/filter devices, enrollments, queue and results over the native BSON documents, with cursors.
-6. **Hardening** (built, see [fleetcore.md](fleetcore.md)): per-tenant sealing of secrets with keys a tenant's server holds alone, certificate (x509) login to MongoDB with one database per identity, mutual-TLS management API, source check for tenant scoping. Still to do: a relay from one cluster-level change stream (or outbox) to NATS for events.
+Everything in the earlier plan is built. What is left, honestly:
 
-Order: VPP and apps, user enrollment, device APIs, hardening, blueprints, VPP, device APIs, hardening. ADE and the command API are what make a first real fleet usable.
+1. **Real devices**: the protocol, ADE, BYOD, attestation, VPP and Platform SSO are tested against Apple's schemas, documented behavior and fakes (including a synthetic attestation chain). None has run against a real device, Business Manager or the App Store yet.
+2. **Event relay**: one change stream (or outbox) from the cluster to a message bus, for products that want events.
+3. **Translator**: assets for certificates, SCEP, ACME and VPN; more restriction settings as Apple adds declarations (the coverage report lists what to look at).
+4. **UserAuthenticate** beyond the minimal digest round; **Platform SSO** presets for vendors other than Microsoft Entra.
+5. **Migration tooling** from other MDMs (device records, enrollments).

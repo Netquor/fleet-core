@@ -47,6 +47,45 @@ Every option is a flag or an environment variable.
 
 Subcommands for operators: `fleetcore keygen`, `fleetcore tenant-key`, `fleetcore mongo-user`. `fleetcore -rekey` seals everything stored with the current key and exits.
 
+## More of Apple's MDM
+
+### Enrollment kinds
+
+| Kind | Path | Notes |
+| --- | --- | --- |
+| Device enrollment (profile) | `/enroll` | SCEP identity (or ACME, below), one-use challenge |
+| Automated Device Enrollment | `/enroll/ade` | the device's request is signed by Apple; the signature is checked to the Apple root, so a device DEP already knows needs no challenge; it can be held at Setup Assistant until blueprints finish (`await configuration`) |
+| User Enrollment, account-driven (BYOD) | `/.well-known/com.apple.remotemanagement`, `/enroll/byod` | a Managed Apple Account signs in at your identity provider (`-byod-issuer`, `-byod-jwks`, `-byod-audience`, `-byod-claim`, `-byod-login-url`); the profile has no access rights; the schemas' `user_enrollment: forbidden` rules keep commands and payloads a User Enrollment cannot take from being sent |
+| Managed Apple Account tokens | `GetToken` check-in | for ADE with a Managed Apple Account, signed by the DEP token key (`-maid-dep`) |
+
+The enrollment type is recorded and blueprints can scope on it (a rule on `enrollment_type`), so a BYOD device gets only what its enrollment allows. `UserAuthenticate` is answered minimally (one digest round); an identity provider is the real login.
+
+### ADE follow-ups
+
+Define the DEP profile with a typed API (`POST /v1/dep/profiles/{name}`: URL, skipped panes, await-configuration, supervision, org details) rather than by hand through the proxy; it is checked and uploaded, and assigned. "Device assigned" events from DEP feed blueprints (a new serial is placed in its groups before it first checks in) and pre-license apps by serial.
+
+### Listing devices, enrollments and the queue
+
+`GET /v1/devices`, `/v1/enrollments`, `/v1/enrollments/{id}`, `/v1/enrollments/{id}/queue`, `/v1/queue`: filters by platform, enrollment type, group, state, serial; opaque keyset cursors (`limit`, `cursor`, `next`), so a page never skips or repeats rows while the fleet changes. Results never include sealed data.
+
+### Device workflows
+
+Under `/v1/devices/{id}`: `lost-mode` (POST, DELETE, GET; supervised iOS, refused on User Enrollment), `locate`, `play-sound`, `activation-lock/bypass-code` (POST, DELETE), `filevault/rotate`, `recovery-lock`, `firmware-password`, `secrets`, `apps`. What a device sends back that must stay secret (bypass codes, FileVault recovery keys, recovery lock passwords) is decrypted where needed (FileVault rotation uses a one-use certificate and a PKCS#7 reply), sealed with the tenant key, and shown only by `POST secrets/{kind}/reveal`, which writes an audit row (`secrets/audit`). Bootstrap tokens are escrowed and served back to the device.
+
+### Apps and Apps and Books (VPP)
+
+`PUT /v1/vpp/tokens/{name}` stores a content token per tenant (sealed). Licensing uses the v2 REST API: `GET /v1/vpp/{name}/assets`, `/assignments`, `POST assign` and `unassign` (device-based, so no Apple Account is needed; Apple answers asynchronously and the result is read from its events). A blueprint **app** item names an App Store id (`ResolveApp` looks it up by id or bundle id) and gets: license assignment, then `InstallApplication` (or `InstallEnterpriseApplication` for manifests), managed app configuration and attributes, `RemoveApplication` on leaving scope, and a declarative `app.managed` declaration where the device takes it (iOS 17.2, macOS 26). Installed apps are refreshed with `InstalledApplicationList` and shown at `GET /v1/devices/{id}/apps`.
+
+### Hardware-bound identity (ACME) and Platform SSO
+
+`-acme` serves RFC 8555 at `/acme` with Apple's `device-attest-01`: the device proves with its Secure Enclave that the key is in hardware, from a genuine Apple device (the attestation chain is verified to the Apple Enterprise Attestation Root, the freshness nonce is the hash of the key authorization, and the serial and UDID come from the certificate). The CSR must carry the attested key. By default only serials that Business Manager assigned to this tenant may get a certificate (`-acme-allow-unassigned` opens it to any genuine Apple device). With `-acme-for-enrollment`, enrollment profiles ask for the identity by ACME instead of SCEP (iOS 16, macOS 13.1).
+
+A **platform_sso** blueprint item configures the extensible single sign-on extension: a vendor preset (Microsoft Entra ships as data; add others the same way) plus your overrides, checked against Apple's `com.apple.extensiblesso` schema. It is delivered as the `extensible-sso` declaration where the device takes it (macOS 27) and as a profile otherwise; Platform SSO exists on macOS only.
+
+### Translating profiles to declarations
+
+`POST /v1/ddm/translate` takes a profile and returns, for each payload, the declaration(s) that replace it. Keys match through an alias table (`fleetcore/ddm/translate_aliases.json`, for renamed, nested and restructured settings: passcode, software update, mail, Exchange, CalDAV and CardDAV, LDAP, Google, subscribed calendars, DNS, restrictions) and then by name; nested dictionaries and arrays are translated key by key; every value is checked against the declaration's schema (type, allowed values, range) and a value that does not fit is reported, not sent. A payload that several declarations replace (restrictions are split across Siri, intelligence, keyboard and accessibility) comes back as several results. Credentials never move into a declaration: they are reported with the reason (they belong in an asset). `GET /v1/ddm/translate/coverage` lists, per payload type, the keys translated, the keys with a documented reason not to, and the keys nobody has looked at yet, which is the list to read after a schema update. A test fails the build if an alias points at a key Apple's schema no longer has.
+
 ## Tenants, instances and the shared database
 
 An instance is one fleetcore process serving one tenant. Several tenants' instances can share one MongoDB cluster. There are two layouts, and the difference is what the *cluster* enforces:
@@ -109,7 +148,8 @@ Everything under `/v1` is the management API. For an operator or a control plane
 | Path | |
 | --- | --- |
 | `/v1/commands` | JSON command API (types, send, results) |
-| `/v1/blueprints`, `/v1/groups`, `/v1/devices` | desired state, groups, inventory |
+| `/v1/blueprints`, `/v1/groups`, `/v1/devices`, `/v1/enrollments`, `/v1/queue` | desired state, groups, inventory, enrollments and the command queue (cursors), device workflows |
+| `/v1/vpp` | Apps and Books tokens, assets and licenses |
 | `/v1/dep` | Automated Device Enrollment |
 | `/v1/ddm` | declarative management: support matrix, coverage, per-device state, profile translator |
 | `/v1/applicability` | which payloads apply to which platforms |

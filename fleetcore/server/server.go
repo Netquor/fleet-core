@@ -22,6 +22,7 @@ import (
 	nanoapi "github.com/micromdm/nanomdm/api"
 	"github.com/micromdm/nanomdm/certverify"
 	"github.com/micromdm/nanomdm/cryptoutil"
+	"github.com/micromdm/nanomdm/fleetcore/acme"
 	"github.com/micromdm/nanomdm/fleetcore/admin"
 	"github.com/micromdm/nanomdm/fleetcore/applicability"
 	"github.com/micromdm/nanomdm/fleetcore/blueprints"
@@ -119,6 +120,8 @@ type Config struct {
 	ADERoots *x509.CertPool
 	// VPPBaseURL and AppStoreLookupURL override Apple's Apps and Books and App Store catalog endpoints (tests).
 	VPPBaseURL, AppStoreLookupURL string
+	// ACME turns on the ACME server with device attestation (/acme). Nil: off.
+	ACME *ACMEConfig
 	// MAIDDEPName is the DEP name whose key signs Managed Apple Account tokens; empty uses the only DEP name there is.
 	MAIDDEPName string
 	// NoFeeds stops the server from reaching out to Apple (the device-management schemas on GitHub, the OS releases feed). The built-in snapshot is used.
@@ -128,6 +131,16 @@ type Config struct {
 	Debug  bool
 	// Version is shown at /version.
 	Version string
+}
+
+// ACMEConfig sets up device identities by ACME with hardware attestation.
+type ACMEConfig struct {
+	// ForEnrollment makes the enrollment profiles ask for the identity by ACME instead of SCEP (devices need iOS 16, macOS 13.1 or later).
+	ForEnrollment bool
+	// AllowUnassigned lets any genuine Apple device get a certificate; by default only devices Apple assigned to this server (Automated Device Enrollment) may.
+	AllowUnassigned bool
+	// Roots are the trust anchors for attestations; nil uses Apple's.
+	Roots *x509.CertPool
 }
 
 // BYODConfig sets up account-driven User Enrollment.
@@ -382,6 +395,30 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	if cfg.SeparateCheckin {
 		prof.CheckInURL = cfg.BaseURL + endpointCheckin
 	}
+	var acmeAssigned func(ctx context.Context, serial string) (string, bool, error)
+	if cfg.ACME != nil {
+		acmeStore, err := acme.NewStore(ctx, cfg.PKIDB, cfg.PKITenant)
+		if err != nil {
+			return nil, fmt.Errorf("acme: %w", err)
+		}
+		srv := &acme.Server{Store: acmeStore, BaseURL: cfg.BaseURL, Roots: cfg.ACME.Roots, Issuer: &acme.CAIssuer{Depot: depot, Pass: cfg.CAPass, Organization: cfg.Organization, Days: cfg.SCEPValidityDays}}
+		srv.Authorize = func(ctx context.Context, id acme.Identifier) error {
+			if cfg.ACME.AllowUnassigned {
+				return nil
+			}
+			if id.Type != "permanent-identifier" || acmeAssigned == nil {
+				return errors.New("only devices Apple assigned to this server may get a certificate")
+			}
+			if _, ok, err := acmeAssigned(ctx, id.Value); err != nil || !ok {
+				return errors.New("not assigned")
+			}
+			return nil
+		}
+		mux.Handle("/acme/", srv.Handler())
+		if cfg.ACME.ForEnrollment {
+			prof.ACMEDirectoryURL = cfg.BaseURL + "/acme/directory"
+		}
+	}
 	mux.Handle(endpointEnroll, enroll.Handler(prof, challenges, cfg.EnrollAuthorize))
 	if cfg.BYOD != nil {
 		// Account-driven User Enrollment: the endpoint wants the person's token from the identity provider; the discovery document points devices at it.
@@ -445,6 +482,7 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		if depSvc, err = dep.NewService(ctx, cfg.PKIDB, depStore, cfg.PKITenant, logger.With("service", "dep")); err != nil {
 			return nil, fmt.Errorf("dep service: %w", err)
 		}
+		acmeAssigned = depSvc.Lookup
 		depSvc.EnrollURL = cfg.BaseURL + "/enroll/ade"
 		depSvc.OnDevices = func(ctx context.Context, name string, isFetch bool, resp *godep.FetchDeviceResponseJson) {
 			supervised, _ := depSvc.ProfileFacts(ctx, name)

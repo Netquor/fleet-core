@@ -53,6 +53,9 @@ func main() {
 		byodClaim  = flag.String("byod-claim", env("FLEETCORE_BYOD_CLAIM", "email"), "token claim that holds the person's Managed Apple Account")
 		byodLogin  = flag.String("byod-login-url", env("FLEETCORE_BYOD_LOGIN_URL", ""), "identity provider sign-in page for devices that have no token yet")
 		maidDEP    = flag.String("maid-dep", env("FLEETCORE_MAID_DEP", ""), "DEP name whose key signs Managed Apple Account tokens (default: the only one)")
+		acmeOn     = flag.Bool("acme", os.Getenv("FLEETCORE_ACME") != "", "serve ACME with Apple device attestation at /acme (hardware-bound device identities)")
+		acmeEnroll = flag.Bool("acme-for-enrollment", os.Getenv("FLEETCORE_ACME_FOR_ENROLLMENT") != "", "enrollment profiles ask for the identity by ACME instead of SCEP (iOS 16, macOS 13.1 or later)")
+		acmeOpen   = flag.Bool("acme-allow-unassigned", os.Getenv("FLEETCORE_ACME_ALLOW_UNASSIGNED") != "", "any genuine Apple device may get a certificate, not only those assigned by Apple Business Manager")
 		mongoCA    = flag.String("mongo-ca", env("FLEETCORE_MONGO_CA", ""), "CA certificate that signed the MongoDB servers' certificates")
 		dbName     = flag.String("db", env("FLEETCORE_DB", "fleetcore"), "database name")
 		tenant     = flag.String("tenant", env("FLEETCORE_TENANT", ""), "tenant id (shared-collections mode); empty: the database belongs to one tenant")
@@ -128,6 +131,10 @@ func main() {
 			fatal(logger, errors.New("no certificate in the -admin-ca file"))
 		}
 	}
+	var acmeCfg *server.ACMEConfig
+	if *acmeOn || *acmeEnroll {
+		acmeCfg = &server.ACMEConfig{ForEnrollment: *acmeEnroll, AllowUnassigned: *acmeOpen}
+	}
 	var byodCfg *server.BYODConfig
 	if *byodIssuer != "" {
 		if *byodJWKS == "" || *byodAud == "" {
@@ -137,7 +144,7 @@ func main() {
 	}
 	srv, err := server.New(ctx, server.Config{
 		BaseURL: *base, Organization: *org, Topic: *topic, Storage: store, PKIDB: mc.Database(*dbName), PKITenant: *tenant,
-		CAPass: *caPass, CertSource: server.CertSource(*source), CertHeader: *header, APIKey: *apiKey, Logger: logger, Debug: *debug, Version: version, NoFeeds: *noFeeds, Sealer: sealer, AdminCA: adminPool, BYOD: byodCfg, MAIDDEPName: *maidDEP,
+		CAPass: *caPass, CertSource: server.CertSource(*source), CertHeader: *header, APIKey: *apiKey, Logger: logger, Debug: *debug, Version: version, NoFeeds: *noFeeds, Sealer: sealer, AdminCA: adminPool, BYOD: byodCfg, MAIDDEPName: *maidDEP, ACME: acmeCfg,
 	})
 	if err != nil {
 		fatal(logger, err)

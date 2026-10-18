@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/micromdm/nanomdm/fleetcore/applicability"
+	"go.mongodb.org/mongo-driver/v2/bson"
 	"strings"
 	"time"
 )
@@ -85,6 +86,11 @@ type Item struct {
 	VPPToken    string         `bson:"vpp_token,omitempty" json:"vpp_token,omitempty"`
 	AppConfig   map[string]any `bson:"app_config,omitempty" json:"app_config,omitempty"`
 	AutoUpdate  string         `bson:"auto_update,omitempty" json:"auto_update,omitempty"`
+	// Platform SSO (kind "platform_sso"): single sign-on at the Mac's login window through the identity provider's extension. Preset names a starting point (SSOPresets) and Parameters
+	// fill it in; SSO holds the settings of Apple's extensible single sign-on configuration (the PlatformSSO dictionary, the registration token...) laid over it.
+	Preset     string            `bson:"preset,omitempty" json:"preset,omitempty"`
+	Parameters map[string]string `bson:"parameters,omitempty" json:"parameters,omitempty"`
+	SSO        map[string]any    `bson:"sso,omitempty" json:"sso,omitempty"`
 	// Delivery of a profile: "auto" (the default) sends it as a legacy-profile declaration when the device takes declarative management, and as an MDM profile otherwise;
 	// "declarative" insists on declarative management (a device that cannot is told so); "profile" always uses the MDM InstallProfile command.
 	Delivery string `bson:"delivery,omitempty" json:"delivery,omitempty"`
@@ -132,6 +138,11 @@ func (i Item) Hash() string {
 		h.Write(b)
 	}
 	h.Write([]byte(i.Delivery))
+	if i.Kind == "platform_sso" {
+		b, _ := json.Marshal(i.SSO)
+		pb, _ := json.Marshal(i.Parameters)
+		h.Write([]byte("sso\x00" + i.Preset + "\x00" + string(b) + "\x00" + string(pb)))
+	}
 	if i.Kind == "app" {
 		b, _ := json.Marshal(i.AppConfig)
 		h.Write([]byte("app\x00" + i.AdamID + "\x00" + i.BundleID + "\x00" + i.ManifestURL + "\x00" + i.VPPToken + "\x00" + i.AutoUpdate + "\x00" + string(b)))
@@ -261,4 +272,54 @@ type AppInfo struct {
 	Version      string `bson:"version,omitempty" json:"version,omitempty"`
 	ShortVersion string `bson:"short_version,omitempty" json:"short_version,omitempty"`
 	Managed      bool   `bson:"managed,omitempty" json:"managed,omitempty"`
+}
+
+// plain turns the ordered documents and arrays the MongoDB driver returns for nested values into the plain maps and slices the rest of the code (and JSON, and plists) expect.
+func plain(v any) any {
+	switch t := v.(type) {
+	case bson.D:
+		m := make(map[string]any, len(t))
+		for _, e := range t {
+			m[e.Key] = plain(e.Value)
+		}
+		return m
+	case bson.M:
+		m := make(map[string]any, len(t))
+		for k, e := range t {
+			m[k] = plain(e)
+		}
+		return m
+	case map[string]any:
+		m := make(map[string]any, len(t))
+		for k, e := range t {
+			m[k] = plain(e)
+		}
+		return m
+	case bson.A:
+		a := make([]any, len(t))
+		for i, e := range t {
+			a[i] = plain(e)
+		}
+		return a
+	case []any:
+		a := make([]any, len(t))
+		for i, e := range t {
+			a[i] = plain(e)
+		}
+		return a
+	}
+	return v
+}
+
+func plainMap(m map[string]any) map[string]any {
+	if m == nil {
+		return nil
+	}
+	out, _ := plain(m).(map[string]any)
+	return out
+}
+
+// normalize makes the free-form parts of an item plain.
+func (i *Item) normalize() {
+	i.Params, i.Declaration, i.AppConfig, i.SSO = plainMap(i.Params), plainMap(i.Declaration), plainMap(i.AppConfig), plainMap(i.SSO)
 }

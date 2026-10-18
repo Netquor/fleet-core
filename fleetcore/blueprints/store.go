@@ -615,6 +615,9 @@ type storedBlueprint struct {
 
 func (s *Store) open(d storedBlueprint) (Blueprint, error) {
 	if d.ItemsEnc == "" {
+		for i := range d.Blueprint.Items {
+			d.Blueprint.Items[i].normalize()
+		}
 		return d.Blueprint, nil
 	}
 	b, err := seal.Get(s.Sealer, "blueprint.items", d.ItemsEnc)

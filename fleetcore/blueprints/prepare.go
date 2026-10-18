@@ -98,6 +98,15 @@ func (b *Blueprint) Prepare() error {
 			} else if ps := commands.Check(def.Keys, it.Declaration, ""); len(ps) > 0 {
 				return fmt.Errorf("item %s: %s", it.ID, ps[0].Error())
 			}
+		case "platform_sso":
+			if err := validateSSO(*it); err != nil {
+				return fmt.Errorf("item %s: %w", it.ID, err)
+			}
+			switch it.Delivery {
+			case "", "auto", "declarative", "profile":
+			default:
+				return fmt.Errorf("item %s: delivery is auto, declarative or profile", it.ID)
+			}
 		case "app":
 			if (it.AdamID == "") == (it.ManifestURL == "") {
 				return fmt.Errorf("item %s: an app has an adam_id (App Store, licensed through Apps and Books) or a manifest_url (enterprise), not both", it.ID)
@@ -148,7 +157,7 @@ func (b *Blueprint) Prepare() error {
 				return fmt.Errorf("item %s: deadline_hour is 0 to 23", it.ID)
 			}
 		default:
-			return fmt.Errorf("item %s: kind must be profile, command, declaration, asset, app or os_update", it.ID)
+			return fmt.Errorf("item %s: kind must be profile, command, declaration, asset, app, platform_sso or os_update", it.ID)
 		}
 		switch it.Scope {
 		case "", "system":

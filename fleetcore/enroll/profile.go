@@ -26,6 +26,9 @@ type Options struct {
 	Topic string
 	// SignMessage makes the device sign every request (Mdm-Signature header); use it when TLS is terminated in front of the server and the client certificate does not reach it.
 	SignMessage bool
+	// ACMEDirectoryURL, if set, makes the device get its identity by ACME with hardware attestation (a key that never leaves the device, proven by a certificate chain from Apple)
+	// instead of SCEP. It needs iOS 16, iPadOS 16, macOS 13.1 or later.
+	ACMEDirectoryURL string
 	// RemovalDisallowed stops the person removing the profile on a supervised device.
 	RemovalDisallowed bool
 	// BYOD makes a User Enrollment profile (account-driven enrollment of a personal device): the organization manages only its own data. ManagedAppleID is the person's Managed Apple
@@ -101,6 +104,25 @@ func Build(o Options, challenge string) ([]byte, error) {
 		"PayloadDescription":  "Enrolls this device in " + org + " device management.",
 		"PayloadOrganization": org,
 		"PayloadContent":      []interface{}{scep, mdm},
+	}
+	if o.ACMEDirectoryURL != "" {
+		// The identity is made by ACME with attestation; the profile has no challenge to carry.
+		scep = map[string]interface{}{
+			"PayloadType":        "com.apple.security.acme",
+			"PayloadVersion":     1,
+			"PayloadIdentifier":  o.Identifier + ".acme",
+			"PayloadUUID":        scepUUID,
+			"PayloadDisplayName": "Device identity",
+			"DirectoryURL":       o.ACMEDirectoryURL,
+			"ClientIdentifier":   uuid(),
+			"KeyType":            "ECSECPrimeRandom",
+			"KeySize":            384,
+			"HardwareBound":      true,
+			"Attest":             true,
+			"UsageFlags":         1,
+			"Subject":            [][][]string{{{"O", org}}, {{"CN", cn}}},
+		}
+		root["PayloadContent"] = []interface{}{scep, mdm}
 	}
 	if o.RemovalDisallowed {
 		root["PayloadRemovalDisallowed"] = true

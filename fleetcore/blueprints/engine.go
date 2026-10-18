@@ -303,7 +303,19 @@ func (e *Engine) Reconcile(ctx context.Context, d *Device) (time.Time, error) {
 			oit := it // the item with its own ID: declaration identifiers come from it
 			oit.ID = ent.orig
 			k := appKey(bp.ID, it.ID)
+			var ssoNote string
+			if it.Kind == "platform_sso" {
+				it, ssoNote = e.ssoAs(d, &bp, it)
+				oit = it
+				oit.ID = ent.orig
+			}
 			w := &want{bp: &bp, item: it, held: held, user: ent.user, orig: ent.orig}
+			if ssoNote != "" {
+				w.state, w.note, w.hash = StateNA, ssoNote, it.Hash()
+				desiredKeys[k] = true
+				wants = append(wants, w)
+				continue
+			}
 			if ent.user == noUsers {
 				w.state, w.note, w.hash, w.declarative = StateNA, "this device has no user channel enrolled yet", it.Hash(), true
 				desiredKeys[k] = true
@@ -993,4 +1005,33 @@ func depPlatform(d DEPDevice) string {
 		return "iOS"
 	}
 	return ""
+}
+
+// ssoAs turns a Platform SSO item into what this device takes: a declaration where it has declarative management, a profile otherwise. A non-empty note says it does not apply.
+func (e *Engine) ssoAs(d *Device, bp *Blueprint, it Item) (Item, string) {
+	payload, err := SSOPayload(it)
+	if err != nil {
+		return it, err.Error()
+	}
+	if _, has := payload["PlatformSSO"]; has && d.Platform != "macOS" {
+		return it, "Platform SSO is for Macs; " + d.Platform + " takes the extension without it"
+	}
+	okDecl, _ := declGate(d, typeExtensibleSSO)
+	okBase, _ := declGate(d, typeStatusSubscriptions)
+	out := it
+	if e.DDM != nil && it.Delivery != "profile" && okDecl && okBase {
+		decl, _ := SSODeclaration(payload, d.Platform)
+		out.Kind, out.DeclarationType, out.Declaration = "declaration", typeExtensibleSSO, decl
+		return out, ""
+	}
+	if it.Delivery == "declarative" {
+		return it, "declarative delivery is not possible for this device"
+	}
+	identifier := "fc.sso." + bp.ID + "." + it.ID
+	prof, err := ssoProfile(identifier, payload)
+	if err != nil {
+		return it, err.Error()
+	}
+	out.Kind, out.Payload, out.Identifier, out.Delivery = "profile", prof, identifier, "profile"
+	return out, ""
 }

@@ -1,0 +1,20 @@
+{
+ "entra": {
+  "title": "Microsoft Entra ID (Company Portal single sign-on extension)",
+  "note": "Platform SSO needs macOS 14 or later and the Company Portal app installed; check Microsoft's current documentation for the URLs your tenant's clouds use.",
+  "payload": {
+   "ExtensionIdentifier": "com.microsoft.CompanyPortalMac.ssoextension",
+   "TeamIdentifier": "UBF8T346G9",
+   "Type": "Redirect",
+   "URLs": [
+    "https://login.microsoftonline.com",
+    "https://login.microsoft.com",
+    "https://sts.windows.net",
+    "https://login.partner.microsoftonline.cn",
+    "https://login.chinacloudapi.cn",
+    "https://login.microsoftonline.us",
+    "https://login-us.microsoftonline.com"
+   ]
+  }
+ }
+}

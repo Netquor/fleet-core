@@ -15,7 +15,7 @@ var opts = tenantlint.Options{
 
 // Every package that keeps tenant data in shared collections.
 func TestTenantIsolationInSource(t *testing.T) {
-	for _, dir := range []string{"../../storage/mongodb", "../blueprints", "../ddm", "../dep", "../pki", "../applicability", "../byod", "../vault", "../workflows", "../vpp"} {
+	for _, dir := range []string{"../../storage/mongodb", "../blueprints", "../ddm", "../dep", "../pki", "../applicability", "../byod", "../vault", "../workflows", "../vpp", "../acme"} {
 		dir := dir
 		t.Run(dir, func(t *testing.T) { tenantlint.Check(t, dir, opts) })
 	}

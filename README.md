@@ -6,7 +6,22 @@ NanoMDM is a minimalist [Apple MDM](https://developer.apple.com/documentation/de
 
 ## fleetcore
 
-This fork also contains **fleetcore**, a complete Apple MDM in one binary on MongoDB (SCEP, ADE, JSON command API, blueprints, declarative device management, software update enforcement). See [docs/fleetcore.md](docs/fleetcore.md) and [docs/fleetcore-roadmap.md](docs/fleetcore-roadmap.md).
+This fork also contains **fleetcore**, a complete, standalone Apple MDM in one Go binary on MongoDB. It needs a MongoDB replica set, an Apple push certificate and a public HTTPS name, and nothing else. Any product can manage it through its HTTP API.
+
+- **Enrollment:** a SCEP certificate authority, enrollment profiles, TLS (or a proxy in front), Automated Device Enrollment (ADE/DEP) with signed device requests and await-configuration, account-driven User Enrollment (BYOD) with `GetToken`, and hardware-bound identities by ACME with Apple device attestation.
+- **Configuration:** blueprints (desired state with scope rules, groups and staged rollouts), declarative device management first (configurations, activations, assets, predicates, status, software update enforcement) with profiles as the fallback, platform- and OS-aware payloads that follow Apple's published schemas and OS releases as they change, and a translator from profiles to declarations (with a coverage report).
+- **Operations:** a JSON command API over all of Apple's commands, device, enrollment and command-queue listings with cursors, workflows (Lost Mode, Activation Lock bypass, FileVault key rotation, recovery lock, bootstrap token) with an audited secret vault, Apps and Books (VPP) licensing and `InstallApplication`, Platform SSO items, `UserAuthenticate` for network and mobile users, an event relay to NATS or a signed webhook, and migration from NanoMDM-family servers and device import from other MDMs.
+- **Security and tenancy:** per-tenant sealing of secrets with tenant-held keys, certificate login to MongoDB with one database per tenant identity, a mutual-TLS management API, and a build-time and runtime check that every query on a shared collection is scoped to its tenant.
+
+```sh
+docker run --rm fleetcore keygen            # a master key; keep it somewhere safe
+FLEETCORE_URL=https://mdm.example.com \
+FLEETCORE_API_KEY=$(openssl rand -hex 32) \
+FLEETCORE_MASTER_KEY=<the key> \
+docker compose -f deploy/fleetcore/compose.yaml up --build
+```
+
+See [docs/fleetcore.md](docs/fleetcore.md) (running it, configuration, tenancy, every feature and its API) and [docs/fleetcore-roadmap.md](docs/fleetcore-roadmap.md) (what is built and what is not). Nothing in fleetcore has yet been run against real devices, Apple Business Manager or the App Store.
 
 ## Getting started & Documentation
 
@@ -37,6 +52,8 @@ A brief overview of the various command-line switches and HTTP endpoints and API
   - API-driven interaction (queuing of commands, APNs pushes, etc.)
 
 ## $x not included
+
+This section describes upstream NanoMDM, the library underneath. **fleetcore (above) includes every item listed here.**
 
 NanoMDM is but one component for a functioning MDM server. At a minimum you need a SCEP server and TLS termination, for example. If you've used [MicroMDM](https://github.com/micromdm/micromdm) before you might be interested to know what NanoMDM does *not* include, by way of comparison.
 

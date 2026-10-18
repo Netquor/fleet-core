@@ -13,5 +13,216 @@
   "changeAtNextAuth": {"to": "ChangeAtNextAuth"},
   "customRegex": {"to": "CustomRegex"},
   "allowSimple": {"to": "RequireComplexPasscode", "invert": true, "approximate": true, "note": "allowSimple false forbids simple passcodes; RequireComplexPasscode is the closest setting"}
+ },
+ "com.apple.SoftwareUpdate": {
+  "AutomaticDownload": {"to": "AutomaticActions.Download", "values": {"true": "AlwaysOn", "false": "AlwaysOff"}},
+  "AutomaticallyInstallMacOSUpdates": {"to": "AutomaticActions.InstallOSUpdates", "values": {"true": "AlwaysOn", "false": "AlwaysOff"}},
+  "CriticalUpdateInstall": {"to": "AutomaticActions.InstallSecurityUpdate", "values": {"true": "AlwaysOn", "false": "AlwaysOff"}, "approximate": true, "note": "critical updates are security updates and responses; the declaration setting covers security updates"},
+  "AllowPreReleaseInstallation": {"to": "Beta.ProgramEnrollment", "values": {"true": "Allowed", "false": "AlwaysOff"}, "approximate": true, "note": "controls beta program enrollment rather than pre-release installs as such"},
+  "restrict-software-update-require-admin-to-install": {"to": "AllowStandardUserOSUpdates", "values": {"true": false, "false": true}},
+  "CatalogURL": {"to": "", "note": "a software update catalog cannot be set by a declaration: keep it in a profile"},
+  "AutomaticCheckEnabled": {"to": "", "note": "checking for updates is always on with declarative software updates"},
+  "AutomaticallyInstallAppUpdates": {"to": "", "note": "app updates are not part of the software update declaration"},
+  "ConfigDataInstall": {"to": "", "note": "configuration data updates are not part of the software update declaration"}
+ },
+ "com.apple.caldav.account": {
+  "CalDAVAccountDescription": {"to": "VisibleName"},
+  "CalDAVHostName": {"to": "HostName"},
+  "CalDAVUsername": {"to": "", "note": "credentials are delivered as an asset (a userpassword or identity asset declaration) that the declaration references; create the asset and reference it"},
+  "CalDAVPassword": {"to": "", "note": "credentials are delivered as an asset (a userpassword or identity asset declaration) that the declaration references; create the asset and reference it"},
+  "CalDAVUseSSL": {"to": "", "note": "the declaration does not carry a TLS switch; the port decides"},
+  "VPNUUID": {"to": "", "note": "a declaration cannot reference a per-account VPN"},
+  "CalDAVPort": {"to": "Port"},
+  "CalDAVPrincipalURL": {"to": "Path", "approximate": true, "note": "the principal URL is a full URL; the declaration takes the path on the host"}
+ },
+ "com.apple.carddav.account": {
+  "CardDAVAccountDescription": {"to": "VisibleName"},
+  "CardDAVHostName": {"to": "HostName"},
+  "CardDAVUsername": {"to": "", "note": "credentials are delivered as an asset (a userpassword or identity asset declaration) that the declaration references; create the asset and reference it"},
+  "CardDAVPassword": {"to": "", "note": "credentials are delivered as an asset (a userpassword or identity asset declaration) that the declaration references; create the asset and reference it"},
+  "CardDAVUseSSL": {"to": "", "note": "the declaration does not carry a TLS switch; the port decides"},
+  "VPNUUID": {"to": "", "note": "a declaration cannot reference a per-account VPN"},
+  "CommunicationServiceRules": {"to": "", "note": "communication service rules have no declaration counterpart"},
+  "CardDAVPort": {"to": "Port"},
+  "CardDAVPrincipalURL": {"to": "Path", "approximate": true, "note": "the principal URL is a full URL; the declaration takes the path on the host"}
+ },
+ "com.apple.subscribedcalendar.account": {
+  "SubCalAccountDescription": {"to": "VisibleName"},
+  "SubCalAccountHostName": {"to": "", "note": "the declaration takes the calendar URL, not a host name: build the URL"},
+  "SubCalAccountUsername": {"to": "", "note": "credentials are delivered as an asset (a userpassword or identity asset declaration) that the declaration references; create the asset and reference it"},
+  "SubCalAccountPassword": {"to": "", "note": "credentials are delivered as an asset (a userpassword or identity asset declaration) that the declaration references; create the asset and reference it"},
+  "SubCalAccountUseSSL": {"to": "", "note": "the calendar URL decides"},
+  "VPNUUID": {"to": "", "note": "a declaration cannot reference a per-account VPN"}
+ },
+ "com.apple.google-oauth": {
+  "AccountDescription": {"to": "VisibleName"},
+  "AccountName": {"to": "", "note": "the account identity is delivered as a user identity asset"},
+  "EmailAddress": {"to": "", "note": "the account identity is delivered as a user identity asset"},
+  "VPNUUID": {"to": "", "note": "a declaration cannot reference a per-account VPN"},
+  "CommunicationServiceRules": {"to": "", "note": "communication service rules have no declaration counterpart"}
+ },
+ "com.apple.ldap.account": {
+  "LDAPAccountDescription": {"to": "VisibleName"},
+  "LDAPAccountHostName": {"to": "HostName"},
+  "LDAPAccountUserName": {"to": "", "note": "credentials are delivered as an asset (a userpassword or identity asset declaration) that the declaration references; create the asset and reference it"},
+  "LDAPAccountPassword": {"to": "", "note": "credentials are delivered as an asset (a userpassword or identity asset declaration) that the declaration references; create the asset and reference it"},
+  "LDAPAccountUseSSL": {"to": "", "note": "the declaration does not carry a TLS switch; the port decides"},
+  "VPNUUID": {"to": "", "note": "a declaration cannot reference a per-account VPN"},
+  "LDAPSearchSettings": {"to": "SearchSettings"},
+  "LDAPSearchSettings.LDAPSearchSettingDescription": {"to": "VisibleDescription"},
+  "LDAPSearchSettings.LDAPSearchSettingSearchBase": {"to": "SearchBase"},
+  "LDAPSearchSettings.LDAPSearchSettingScope": {"to": "Scope", "values": {"LDAPSearchSettingScopeBase": "Base", "LDAPSearchSettingScopeOneLevel": "OneLevel", "LDAPSearchSettingScopeSubtree": "Subtree"}}
+ },
+ "com.apple.mail.managed": {
+  "EmailAccountDescription": {"to": "VisibleName"},
+  "EmailAccountType": {"to": "IncomingServer.ServerType", "values": {"EmailTypeIMAP": "IMAP", "EmailTypePOP": "POP"}},
+  "IncomingMailServerHostName": {"to": "IncomingServer.HostName"},
+  "IncomingMailServerPortNumber": {"to": "IncomingServer.Port"},
+  "IncomingMailServerAuthentication": {"to": "IncomingServer.AuthenticationMethod", "values": {"EmailAuthNone": "None", "EmailAuthPassword": "Password", "EmailAuthCRAMMD5": "CRAMMD5", "EmailAuthNTLM": "NTLM", "EmailAuthHTTPMD5": "HTTPMD5"}},
+  "IncomingMailServerIMAPPathPrefix": {"to": "IncomingServer.IMAPPathPrefix"},
+  "OutgoingMailServerHostName": {"to": "OutgoingServer.HostName"},
+  "OutgoingMailServerPortNumber": {"to": "OutgoingServer.Port"},
+  "OutgoingMailServerAuthentication": {"to": "OutgoingServer.AuthenticationMethod", "values": {"EmailAuthNone": "None", "EmailAuthPassword": "Password", "EmailAuthCRAMMD5": "CRAMMD5", "EmailAuthNTLM": "NTLM", "EmailAuthHTTPMD5": "HTTPMD5"}},
+  "EmailAccountName": {"to": "", "note": "the account identity is delivered as a user identity asset"},
+  "EmailAddress": {"to": "", "note": "the account identity is delivered as a user identity asset"},
+  "IncomingMailServerUsername": {"to": "", "note": "credentials are delivered as an asset (a userpassword or identity asset declaration) that the declaration references; create the asset and reference it"},
+  "IncomingPassword": {"to": "", "note": "credentials are delivered as an asset (a userpassword or identity asset declaration) that the declaration references; create the asset and reference it"},
+  "OutgoingMailServerUsername": {"to": "", "note": "credentials are delivered as an asset (a userpassword or identity asset declaration) that the declaration references; create the asset and reference it"},
+  "OutgoingPassword": {"to": "", "note": "credentials are delivered as an asset (a userpassword or identity asset declaration) that the declaration references; create the asset and reference it"},
+  "OutgoingPasswordSameAsIncomingPassword": {"to": "", "note": "credentials are delivered as an asset (a userpassword or identity asset declaration) that the declaration references; create the asset and reference it"},
+  "IncomingMailServerUseSSL": {"to": "", "note": "the declaration does not carry a TLS switch; the port decides"},
+  "OutgoingMailServerUseSSL": {"to": "", "note": "the declaration does not carry a TLS switch; the port decides"},
+  "SMIMEEnabled": {"to": "", "note": "S/MIME is enabled through its signing and encryption settings"},
+  "SMIMESigningCertificateUUID": {"to": "", "note": "identities are delivered as assets"},
+  "SMIMEEncryptionCertificateUUID": {"to": "", "note": "identities are delivered as assets"},
+  "SMIMEEncryptByDefault": {"to": "", "note": "the declaration has no counterpart: keep this setting in a profile"},
+  "SMIMEEncryptByDefaultUserOverrideable": {"to": "", "note": "the declaration has no counterpart: keep this setting in a profile"},
+  "PreventMove": {"to": "", "note": "the declaration has no counterpart: keep this setting in a profile"},
+  "PreventAppSheet": {"to": "", "note": "the declaration has no counterpart: keep this setting in a profile"},
+  "disableMailRecentsSyncing": {"to": "", "note": "the declaration has no counterpart: keep this setting in a profile"},
+  "allowMailDrop": {"to": "", "note": "the declaration has no counterpart: keep this setting in a profile"},
+  "VPNUUID": {"to": "", "note": "a declaration cannot reference a per-account VPN"},
+  "SMIMESigningEnabled": {"to": "SMIME.Signing.Enabled"},
+  "SMIMEEncryptionEnabled": {"to": "SMIME.Encryption.Enabled"},
+  "SMIMESigningUserOverrideable": {"to": "SMIME.Signing.UserOverrideable"},
+  "SMIMESigningCertificateUUIDUserOverrideable": {"to": "SMIME.Signing.IdentityUserOverrideable"},
+  "SMIMEEncryptionCertificateUUIDUserOverrideable": {"to": "SMIME.Encryption.IdentityUserOverrideable"},
+  "SMIMEEnablePerMessageSwitch": {"to": "SMIME.Encryption.PerMessageSwitchEnabled"},
+  "SMIMEEnableEncryptionPerMessageSwitch": {"to": "SMIME.Encryption.PerMessageSwitchEnabled"}
+ },
+ "com.apple.eas.account": {
+  "Host": {"to": "HostName"},
+  "EmailAddress": {"to": "", "note": "the account identity is delivered as a user identity asset"},
+  "UserName": {"to": "", "note": "credentials are delivered as an asset (a userpassword or identity asset declaration) that the declaration references; create the asset and reference it"},
+  "Password": {"to": "", "note": "credentials are delivered as an asset (a userpassword or identity asset declaration) that the declaration references; create the asset and reference it"},
+  "SSL": {"to": "", "note": "the declaration does not carry a TLS switch"},
+  "Certificate": {"to": "", "note": "identities are delivered as assets"},
+  "CertificateName": {"to": "", "note": "identities are delivered as assets"},
+  "CertificatePassword": {"to": "", "note": "identities are delivered as assets"},
+  "PayloadCertificateUUID": {"to": "", "note": "identities are delivered as assets"},
+  "EnableMail": {"to": "MailServiceActive"},
+  "EnableContacts": {"to": "ContactsServiceActive"},
+  "EnableCalendars": {"to": "CalendarServiceActive"},
+  "EnableReminders": {"to": "RemindersServiceActive"},
+  "EnableNotes": {"to": "NotesServiceActive"},
+  "EnableMailUserOverridable": {"to": "LockMailService", "values": {"true": false, "false": true}},
+  "EnableContactsUserOverridable": {"to": "LockContactsService", "values": {"true": false, "false": true}},
+  "EnableCalendarsUserOverridable": {"to": "LockCalendarService", "values": {"true": false, "false": true}},
+  "EnableRemindersUserOverridable": {"to": "LockRemindersService", "values": {"true": false, "false": true}},
+  "EnableNotesUserOverridable": {"to": "LockNotesService", "values": {"true": false, "false": true}},
+  "OAuthSignInURL": {"to": "OAuth.SignInURL"},
+  "OAuthTokenRequestURL": {"to": "OAuth.TokenRequestURL"},
+  "SMIMEEnabled": {"to": "", "note": "S/MIME is enabled through its signing and encryption settings"},
+  "SMIMESigningCertificateUUID": {"to": "", "note": "identities are delivered as assets"},
+  "SMIMEEncryptionCertificateUUID": {"to": "", "note": "identities are delivered as assets"},
+  "SMIMEEncryptByDefault": {"to": "", "note": "the declaration has no counterpart: keep this setting in a profile"},
+  "SMIMEEncryptByDefaultUserOverrideable": {"to": "", "note": "the declaration has no counterpart: keep this setting in a profile"},
+  "PreventMove": {"to": "", "note": "the declaration has no counterpart: keep this setting in a profile"},
+  "PreventAppSheet": {"to": "", "note": "the declaration has no counterpart: keep this setting in a profile"},
+  "disableMailRecentsSyncing": {"to": "", "note": "the declaration has no counterpart: keep this setting in a profile"},
+  "allowMailDrop": {"to": "", "note": "the declaration has no counterpart: keep this setting in a profile"},
+  "MailNumberOfPastDaysToSync": {"to": "", "note": "the declaration has no counterpart: keep this setting in a profile"},
+  "HeaderMagic": {"to": "", "note": "the declaration has no counterpart: keep this setting in a profile"},
+  "OverridePreviousPassword": {"to": "", "note": "the declaration has no counterpart: keep this setting in a profile"},
+  "CommunicationServiceRules": {"to": "", "note": "the declaration has no counterpart: keep this setting in a profile"},
+  "VPNUUID": {"to": "", "note": "a declaration cannot reference a per-account VPN"},
+  "SMIMESigningEnabled": {"to": "SMIME.Signing.Enabled"},
+  "SMIMEEncryptionEnabled": {"to": "SMIME.Encryption.Enabled"},
+  "SMIMESigningUserOverrideable": {"to": "SMIME.Signing.UserOverrideable"},
+  "SMIMESigningCertificateUUIDUserOverrideable": {"to": "SMIME.Signing.IdentityUserOverrideable"},
+  "SMIMEEncryptionCertificateUUIDUserOverrideable": {"to": "SMIME.Encryption.IdentityUserOverrideable"},
+  "SMIMEEnablePerMessageSwitch": {"to": "SMIME.Encryption.PerMessageSwitchEnabled"},
+  "SMIMEEnableEncryptionPerMessageSwitch": {"to": "SMIME.Encryption.PerMessageSwitchEnabled"}
+ },
+ "com.apple.dnsSettings.managed": {
+  "DNSSettings.PayloadCertificateUUID": {"to": "", "note": "identities are delivered as assets; set IdentityAssetReference"}
+ },
+ "com.apple.dnsProxy.managed": {
+  "ProviderBundleIdentifier": {"to": "", "note": "the declaration takes one composed identifier (bundle identifier and team): build ProviderComposedIdentifier"},
+  "ProviderDesignatedRequirement": {"to": "", "note": "the declaration takes one composed identifier (bundle identifier and team): build ProviderComposedIdentifier"}
+ },
+ "com.apple.security.pem": {
+  "PayloadContent": {"to": "", "note": "certificate data is delivered as an asset that the declaration references"}
+ },
+ "com.apple.security.root": {
+  "PayloadContent": {"to": "", "note": "certificate data is delivered as an asset that the declaration references"}
+ },
+ "com.apple.security.pkcs1": {
+  "PayloadContent": {"to": "", "note": "certificate data is delivered as an asset that the declaration references"}
+ },
+ "com.apple.security.pkcs12": {
+  "PayloadContent": {"to": "", "note": "certificate data is delivered as an asset that the declaration references"},
+  "Password": {"to": "", "note": "certificate passwords are delivered with the asset"}
+ },
+ "com.apple.security.scep": {
+  "PayloadContent": {"to": "", "note": "SCEP settings are delivered as a credential asset: build the asset declaration"}
+ },
+ "com.apple.security.acme": {
+  "DirectoryURL": {"to": "", "note": "ACME settings are delivered as a credential asset: build the asset declaration"},
+  "ClientIdentifier": {"to": "", "note": "ACME settings are delivered as a credential asset: build the asset declaration"},
+  "KeySize": {"to": "", "note": "ACME settings are delivered as a credential asset: build the asset declaration"},
+  "KeyType": {"to": "", "note": "ACME settings are delivered as a credential asset: build the asset declaration"},
+  "HardwareBound": {"to": "", "note": "ACME settings are delivered as a credential asset: build the asset declaration"},
+  "Subject": {"to": "", "note": "ACME settings are delivered as a credential asset: build the asset declaration"},
+  "SubjectAltName": {"to": "", "note": "ACME settings are delivered as a credential asset: build the asset declaration"},
+  "UsageFlags": {"to": "", "note": "ACME settings are delivered as a credential asset: build the asset declaration"},
+  "ExtendedKeyUsage": {"to": "", "note": "ACME settings are delivered as a credential asset: build the asset declaration"},
+  "Attest": {"to": "", "note": "ACME settings are delivered as a credential asset: build the asset declaration"},
+  "KeyIsExtractable": {"to": "", "note": "ACME settings are delivered as a credential asset: build the asset declaration"},
+  "AllowAllAppsAccess": {"to": "", "note": "ACME settings are delivered as a credential asset: build the asset declaration"}
+ },
+ "com.apple.servicemanagement": {
+  "Rules": {"to": "", "note": "background tasks are described by launchd configurations with an executable asset; rules do not map one to one"}
+ },
+ "com.apple.vpn.managed": {
+  "UserDefinedName": {"to": "VisibleName"},
+  "VPNType": {"to": "", "note": "VPN settings are structured differently in each VPN declaration: translate them by hand"},
+  "VPNSubType": {"to": "", "note": "VPN settings are structured differently in each VPN declaration: translate them by hand"},
+  "VendorConfig": {"to": "", "note": "VPN settings are structured differently in each VPN declaration: translate them by hand"},
+  "VPN": {"to": "", "note": "VPN settings are structured differently in each VPN declaration: translate them by hand"},
+  "IPv4": {"to": "", "note": "VPN settings are structured differently in each VPN declaration: translate them by hand"},
+  "PPP": {"to": "", "note": "VPN settings are structured differently in each VPN declaration: translate them by hand"},
+  "IPSec": {"to": "", "note": "VPN settings are structured differently in each VPN declaration: translate them by hand"},
+  "IKEv2": {"to": "", "note": "VPN settings are structured differently in each VPN declaration: translate them by hand"},
+  "DNS": {"to": "", "note": "VPN settings are structured differently in each VPN declaration: translate them by hand"},
+  "Proxies": {"to": "", "note": "VPN settings are structured differently in each VPN declaration: translate them by hand"},
+  "AlwaysOn": {"to": "", "note": "VPN settings are structured differently in each VPN declaration: translate them by hand"},
+  "TransparentProxy": {"to": "", "note": "VPN settings are structured differently in each VPN declaration: translate them by hand"}
+ },
+ "com.apple.webcontent-filter": {
+  "UserDefinedName": {"to": "VisibleName"}
+ },
+ "com.apple.applicationaccess": {
+  "allowAssistant": {"to": "Enabled"},
+  "allowAssistantUserGeneratedContent": {"to": "AllowUserGeneratedContent"},
+  "allowAssistantWhileLocked": {"to": "AllowWhileLocked"},
+  "forceAssistantProfanityFilter": {"to": "ForceProfanityFilter"},
+  "allowPredictiveKeyboard": {"to": "AllowPredictiveText"},
+  "allowContinuousPathKeyboard": {"to": "AllowSlideToType"},
+  "allowMailSmartReplies": {"to": "Apps.Mail.AllowSmartReplies"},
+  "allowMailSummary": {"to": "Apps.Mail.AllowSummary"},
+  "allowNotesTranscription": {"to": "Apps.Notes.AllowTranscription"},
+  "allowNotesTranscriptionSummary": {"to": "Apps.Notes.AllowTranscriptionSummary"},
+  "allowSafariSummary": {"to": "Apps.Safari.AllowSummary"}
  }
 }

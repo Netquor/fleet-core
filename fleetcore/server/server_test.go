@@ -481,6 +481,9 @@ func TestEnrollEndToEnd(t *testing.T) {
 	if code, b := api("POST", "/v1/ddm/translate", string(trBody)); code != 200 || !strings.Contains(b, `"MinimumLength":8`) || !strings.Contains(b, "unknownSetting") {
 		t.Errorf("translate: %d %.300s", code, b)
 	}
+	if code, b := api("GET", "/v1/ddm/translate/coverage", ""); code != 200 || !strings.Contains(b, "com.apple.mail.managed") {
+		t.Errorf("translate coverage: %d %.300s", code, b)
+	}
 	if code, b := api("GET", "/v1/ddm/support", ""); code != 200 || !strings.Contains(b, "software_update") {
 		t.Errorf("support: %d %.200s", code, b)
 	}

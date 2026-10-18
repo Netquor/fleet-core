@@ -153,7 +153,7 @@ func TestTranslatePasscode(t *testing.T) {
 	if !ok || tr.Declaration != "com.apple.configuration.passcode.settings" {
 		t.Fatalf("%+v", tr)
 	}
-	want := map[string]any{"RequirePasscode": true, "MinimumLength": 8, "RequireComplexPasscode": true, "MaximumInactivityInMinutes": 5}
+	want := map[string]any{"RequirePasscode": true, "MinimumLength": int64(8), "RequireComplexPasscode": true, "MaximumInactivityInMinutes": int64(5)}
 	for k, v := range want {
 		if tr.Payload[k] != v {
 			t.Errorf("%s: got %v want %v", k, tr.Payload[k], v)

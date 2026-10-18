@@ -564,14 +564,30 @@ func (a *API) Handler() http.Handler {
 		var out []outRow
 		for _, c := range p.PayloadContent {
 			typ, _ := c["PayloadType"].(string)
-			tr, ok := ddm.Translate(typ, c, req.Declaration, schemas.Current())
+			var trs []*ddm.Translation
+			var ok bool
+			if req.Declaration != "" {
+				var tr *ddm.Translation
+				if tr, ok = ddm.Translate(typ, c, req.Declaration, schemas.Current()); ok {
+					trs = []*ddm.Translation{tr}
+				}
+			} else {
+				trs, ok = ddm.TranslateAll(typ, c, schemas.Current())
+			}
 			if !ok {
 				out = append(out, outRow{PayloadType: typ, Note: "no native declaration for this payload type: keep it as a profile (it is delivered as a legacy-profile declaration where the device allows)"})
 				continue
 			}
-			out = append(out, outRow{PayloadType: typ, Translation: tr})
+			for _, tr := range trs {
+				out = append(out, outRow{PayloadType: typ, Translation: tr})
+			}
 		}
 		writeJSON(w, 200, map[string]any{"payloads": out})
+	})
+	// How much of each profile payload the translator covers, by the pinned schemas and the alias table: what to look at after a schema update.
+	mux.HandleFunc("GET /ddm/translate/coverage", func(w http.ResponseWriter, r *http.Request) {
+		set := schemas.Current()
+		writeJSON(w, 200, map[string]any{"schema": set.Ref, "payloads": ddm.Coverage(set)})
 	})
 	// From which OS version declarative management, and its software update features, are available, per platform; and every declaration type for one platform.
 	mux.HandleFunc("GET /ddm/support", func(w http.ResponseWriter, r *http.Request) {

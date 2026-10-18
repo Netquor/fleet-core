@@ -19,6 +19,7 @@ import (
 	"github.com/micromdm/nanomdm/fleetcore/commands"
 	"github.com/micromdm/nanomdm/fleetcore/ddm"
 	"github.com/micromdm/nanomdm/fleetcore/osreleases"
+	"github.com/micromdm/nanomdm/fleetcore/schemas"
 	"github.com/micromdm/plist"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
@@ -68,6 +69,8 @@ type Engine struct {
 	Releases *osreleases.Catalog
 	// DDM, if set, enables declarative device management items (declarations and software updates).
 	DDM *ddm.Store
+	// Organization names the organization to devices (the organization-info management declaration); empty sends none.
+	Organization string
 	// BaseURL is the server's public address; legacy-profile declarations point devices at it. Without it profiles are always delivered as MDM profiles.
 	BaseURL string
 	Logger  log.Logger
@@ -259,6 +262,7 @@ func (e *Engine) Reconcile(ctx context.Context, d *Device) (time.Time, error) {
 	var wants []*want
 	desiredKeys := map[string]bool{}
 	desiredIdentifiers := map[string]bool{}
+	singleOwner := map[string]string{}
 	for _, c := range bps {
 		if !c.scope.Match(d) {
 			continue
@@ -341,6 +345,30 @@ func (e *Engine) Reconcile(ctx context.Context, d *Device) (time.Time, error) {
 				}
 				w.hash = it.Hash()
 				w.declarative = true
+				if it.Kind == "os_update" {
+					// Where declarative enforcement is not possible the MDM command still works on an OS that has not removed it.
+					okBase, _ := declGate(d, typeStatusSubscriptions)
+					okEnf, _ := declGate(d, typeEnforceSpecific)
+					if !okBase || !okEnf {
+						cmd, body, uuid, target, note, ok := e.osUpdateCommand(d, it)
+						if !ok && note != "" {
+							_, why := declGate(d, typeEnforceSpecific)
+							w.state, w.note = StateNA, why+"; "+note
+							break
+						}
+						if ok {
+							_ = cmd
+							w.declarative = false
+							w.hash += "|cmd|" + target
+							w.note = note
+							w.send, w.uuid = body, uuid
+							if body == nil {
+								w.state = StateApplied // nothing to send: already there, or nothing on offer
+							}
+							break
+						}
+					}
+				}
 				if ok, why := declGate(d, typeStatusSubscriptions); !ok {
 					w.state, w.note = StateNA, "this device cannot take declarative management: "+why
 					break
@@ -349,6 +377,14 @@ func (e *Engine) Reconcile(ctx context.Context, d *Device) (time.Time, error) {
 					if ok, why := declGate(d, it.DeclarationType); !ok {
 						w.state, w.note = StateNA, why
 						break
+					}
+					// A type Apple allows only once per device: the higher-priority blueprint's wins (the device would report both invalid otherwise).
+					if def, ok := schemas.Current().Declaration(it.DeclarationType); ok && def.Apply == "single" {
+						if owner, taken := singleOwner[it.DeclarationType]; taken {
+							w.state, w.note = StateNA, "conflicts with "+owner+": the device takes only one "+def.Title+" declaration"
+							break
+						}
+						singleOwner[it.DeclarationType] = bp.ID + "/" + it.ID
 					}
 					w.decls = declarationFor(&bp, it)
 				} else {
@@ -524,7 +560,7 @@ func ProfileIdentifier(payload []byte) (string, error) {
 
 // reconcileDeclarations stores the device's declaration set, records each declarative item's state, and tells the device to sync when its set changed.
 func (e *Engine) reconcileDeclarations(ctx context.Context, d *Device, wants []*want, have map[string]*Application, osCtx string, now time.Time, soonest func(time.Time)) error {
-	decls := systemDeclarations(d)
+	decls := systemDeclarations(d, e.Organization)
 	var keepKeys []string
 	var current []ddm.Declaration
 	for _, w := range wants {
@@ -626,4 +662,37 @@ func (e *Engine) reconcileDeclarations(ctx context.Context, d *Device, wants []*
 	}
 	soonest(now.Add(e.Cfg.PendingTimeout))
 	return e.DDM.Notified(ctx, d.ID, st.Token)
+}
+
+// osUpdateCommand is the MDM fallback for a software update: a ScheduleOSUpdate command, for a device that cannot take declarative enforcement yet still has the command.
+// body is nil when there is nothing to send (the device is already there, or Apple offers nothing); ok is false when the command is not available either.
+func (e *Engine) osUpdateCommand(d *Device, it Item) (cmd *commands.Command, body []byte, uuid, target, note string, ok bool) {
+	cmd, found := commandsGet("ScheduleOSUpdate")
+	if !found {
+		return nil, nil, "", "", "", false
+	}
+	info, listed := cmd.OS[schemas.SchemaOS(d.Platform)]
+	if !listed || info.UnsupportedOn(d.OSVersion) {
+		return nil, nil, "", "", "", false
+	}
+	if info.Supervised && (d.Supervised == nil || !*d.Supervised) {
+		return nil, nil, "", "", "ScheduleOSUpdate needs a supervised " + d.Platform + " device", false
+	}
+	rel, found := e.resolveTarget(d, it)
+	if !found {
+		return cmd, nil, "", "", "Apple offers no matching update for this device right now", true
+	}
+	cur, _ := schemas.VersionNum(d.OSVersion)
+	if cur >= rel.Num {
+		return cmd, nil, "", rel.Version, "already on " + d.OSVersion, true
+	}
+	action := it.InstallAction
+	if action == "" {
+		action = "Default"
+	}
+	body, uuid, ps := commands.Build(cmd, map[string]any{"Updates": []any{map[string]any{"ProductVersion": rel.Version, "InstallAction": action}}}, commands.Options{Platform: d.Platform, OSVersion: d.OSVersion})
+	if len(ps) > 0 {
+		return cmd, nil, "", "", ps[0].Error(), false
+	}
+	return cmd, body, uuid, rel.Version, "ScheduleOSUpdate " + rel.Version + " (" + action + "): this device cannot take declarative enforcement", true
 }

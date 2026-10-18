@@ -79,19 +79,12 @@ func TestSoftwareUpdateEnforcement(t *testing.T) {
 	if c := f.declsOf("old-iphone")["fc.updates.os"]; c.Payload["TargetOSVersion"] != "26.7.1" {
 		t.Errorf("old iPhone: %v", c.Payload)
 	}
-	// An unsupervised Mac is told why not, not failed.
-	apps, _ := f.store.Applications(f.ctx, "byod")
-	var found bool
-	for _, a := range apps {
-		if a.Item == "os" {
-			found = true
-			if a.State != StateNA || !strings.Contains(a.Note, "not available") {
-				t.Errorf("byod: %+v", a)
-			}
-		}
+	// An unsupervised Mac can take neither: Apple allows both only on supervised devices. It is told why.
+	if a := appFor(f, "byod", "os"); a.State != StateNA || !strings.Contains(a.Note, "supervised") {
+		t.Errorf("byod: %+v", a)
 	}
-	if !found {
-		t.Error("no record for the unsupervised Mac")
+	if _, ok := f.declsOf("byod")["fc.updates.os"]; ok {
+		t.Error("an unsupervised Mac was given the enforcement declaration")
 	}
 	// A Mac already on the release has nothing to enforce.
 	if _, ok := f.declsOf("current")["fc.updates.os"]; ok {
@@ -344,5 +337,86 @@ func TestEquivalentsExistInTheSchema(t *testing.T) {
 				t.Errorf("%s: declaration %s is not in the schema", payload, d)
 			}
 		}
+	}
+}
+
+func TestSoftwareUpdateFallsBackToTheMDMCommand(t *testing.T) {
+	f := newFixture(t)
+	f.releases()
+	// An iPhone below iOS 17 cannot take declarative enforcement; ScheduleOSUpdate still exists there.
+	f.device("old-phone", "iOS", "16.4")
+	f.supervised("old-phone", true)
+	f.store.SetDeviceFields(f.ctx, "old-phone", bson.D{{Key: "model", Value: "iPhone16,1"}}, true)
+	// A Mac past the removal of the commands and without supervision has no way: told so, not failed.
+	f.device("new-mac", "macOS", "27.0")
+	// A supervised Mac on 14 takes the declaration, not the command.
+	f.device("sonoma", "macOS", "14.2")
+	f.supervised("sonoma", true)
+	f.save(Blueprint{ID: "updates", Enabled: true, Items: []Item{{ID: "os", Kind: "os_update", Target: "latest", InstallAction: "DownloadOnly"}}})
+	f.reconcile()
+
+	var cmd *sent
+	for _, s := range f.enq.take() {
+		s := s
+		if s.requestType() == "ScheduleOSUpdate" {
+			cmd = &s
+		}
+	}
+	if cmd == nil || cmd.ids[0] != "old-phone" {
+		t.Fatalf("no ScheduleOSUpdate for the old iPhone: %v", cmd)
+	}
+	updates, _ := cmd.param("Updates").([]any)
+	if len(updates) != 1 || updates[0].(map[string]any)["InstallAction"] != "DownloadOnly" {
+		t.Errorf("updates: %v", cmd.param("Updates"))
+	}
+	if a := appFor(f, "old-phone", "os"); a.Kind != "os_update" || a.State != StatePending || a.Delivery == "declarative" {
+		t.Errorf("old phone: %+v", a)
+	}
+	if a := appFor(f, "new-mac", "os"); a.State != StateNA {
+		t.Errorf("new mac: %+v", a)
+	}
+	if _, ok := f.declsOf("sonoma")["fc.updates.os"]; !ok {
+		t.Error("the supervised Mac on 14 should have the declaration")
+	}
+}
+
+func TestSingleInstanceDeclarationsDoNotCollide(t *testing.T) {
+	f := newFixture(t)
+	f.device("mac", "macOS", "27.0.1")
+	f.supervised("mac", true)
+	item := func(limit int) Item {
+		return Item{ID: "cache", Kind: "declaration", DeclarationType: "com.apple.configuration.content-cache.settings", Declaration: map[string]any{"CacheLimit": limit}}
+	}
+	f.save(Blueprint{ID: "high", Enabled: true, Priority: 10, Items: []Item{item(100)}})
+	f.save(Blueprint{ID: "low", Enabled: true, Priority: 1, Items: []Item{item(200)}})
+	f.reconcile()
+	d := f.declsOf("mac")
+	if d["fc.high.cache"].Type == "" || d["fc.low.cache"].Type != "" {
+		t.Errorf("only the higher priority may be sent: %v", keys(d))
+	}
+	if a := appFor(f, "mac", "cache"); a.Blueprint == "low" && a.State != StateNA {
+		t.Errorf("low: %+v", a)
+	}
+	apps, _ := f.store.Applications(f.ctx, "mac")
+	var lowNote string
+	for _, a := range apps {
+		if a.Blueprint == "low" {
+			lowNote = a.Note
+		}
+	}
+	if !strings.Contains(lowNote, "conflicts with high/cache") {
+		t.Errorf("low's note: %q", lowNote)
+	}
+}
+
+func TestOrganizationInfoIsSent(t *testing.T) {
+	f := newFixture(t)
+	f.eng.Organization = "Acme Co"
+	f.device("mac", "macOS", "15.0")
+	f.supervised("mac", true)
+	f.save(Blueprint{ID: "x", Enabled: true})
+	f.reconcile()
+	if d := f.declsOf("mac")["fc.org"]; d.Kind != ddm.KindManagement || d.Payload["Name"] != "Acme Co" {
+		t.Errorf("%+v", d)
 	}
 }

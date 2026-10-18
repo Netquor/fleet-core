@@ -75,6 +75,11 @@ func (b *Blueprint) Prepare() error {
 					return fmt.Errorf("item %s: target must be latest, latest-in-major or a version such as 27.0.1", it.ID)
 				}
 			}
+			switch it.InstallAction {
+			case "", "Default", "DownloadOnly", "InstallASAP", "NotifyOnly", "InstallLater", "InstallForceRestart":
+			default:
+				return fmt.Errorf("item %s: install_action is Default, DownloadOnly, InstallASAP, NotifyOnly, InstallLater or InstallForceRestart", it.ID)
+			}
 			if it.DeadlineDays < 0 || it.DeadlineDays > 365 {
 				return fmt.Errorf("item %s: deadline_days is 0 to 365", it.ID)
 			}

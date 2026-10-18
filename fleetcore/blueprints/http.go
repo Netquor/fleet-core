@@ -473,6 +473,15 @@ func (a *API) Handler() http.Handler {
 		}
 		writeJSON(w, 200, map[string]any{"items": items, "applications_by_delivery": counts, "profile_payloads_with_native_declarations": len(equiv)})
 	})
+	// From which OS version declarative management, and its software update features, are available, per platform; and every declaration type for one platform.
+	mux.HandleFunc("GET /ddm/support", func(w http.ResponseWriter, r *http.Request) {
+		set := schemas.Current()
+		if p := r.URL.Query().Get("platform"); p != "" {
+			writeJSON(w, 200, map[string]any{"platform": p, "schema": set.Ref, "declarations": ddm.SupportFor(set, p)})
+			return
+		}
+		writeJSON(w, 200, map[string]any{"schema": set.Ref, "platforms": ddm.Support(set)})
+	})
 	mux.HandleFunc("GET /ddm/devices/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if e.DDM == nil {
 			fail(w, 501, "declarative management is not enabled")

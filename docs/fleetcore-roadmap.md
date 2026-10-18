@@ -77,6 +77,29 @@ Blueprint item kinds for it:
 
 Who can receive what is read from Apple's schema per declaration type: the platform, the OS version it was introduced in, and the enrollment kinds it allows (supervised, user, device). A device that cannot is not failed; its application is `not_applicable` with the reason. Supervision is learned from the device (`IsSupervised`), because Apple allows many declarations, including software update enforcement on a Mac, only on supervised devices.
 
+### Minimum OS versions (from Apple's schemas; `GET /v1/ddm/support`)
+
+| Platform | Declarative management (status channel, activations) | Profiles as declarations | Software update enforcement | Update settings | Update status items |
+| --- | --- | --- | --- | --- | --- |
+| iOS and iPadOS | 15.0 | 15.0 | 17.0 (supervised or device enrollment) | 18.0 | 17.0 |
+| macOS | 13.0 | 13.0 | 14.0 (supervised only) | 15.0 (supervised only) | 14.0 |
+| tvOS | 16.0 | 16.0 | 18.4 | 18.4 | 18.4 |
+| visionOS | 1.1 | 1.1 | 26.0 | 26.0 | 26.0 |
+| watchOS | 10.0 | 10.0 | none | none | none |
+
+The MDM software-update commands are deprecated in 26 and removed in 27, so below the enforcement version a device is updated with `ScheduleOSUpdate` (an `os_update` item falls back to it, honoring `install_action`, only where the schema says the command exists and the device is supervised if it requires that), and from 27 on only declaratively. The per-platform list of every declaration type with its first version and enrollments is `GET /v1/ddm/support?platform=macOS`. A regression test pins these numbers to the schema.
+
+### Declarative management that is still open
+
+- **Assets** (credentials: SCEP, ACME, identity, certificate, user and password; data) and declarations that reference them: needed for certificates and identities delivered declaratively, and for `ProfileAssetReference` (legacy profiles without a URL, 27.0+).
+- **Management properties** (`com.apple.management.properties`) and server capabilities declarations are not sent; organization-info is, from the server's organization name.
+- **User channel and scopes**: declarations go to the system scope. User-scoped declarations (macOS user channel, Shared iPad users) need per-user enrollment IDs in the engine.
+- **Activation predicates** and ordering between declarations: activations are generated one per configuration; a configuration that needs an asset is not yet modeled.
+- **Translating profiles into native declarations** is manual (`/v1/ddm/coverage` shows what has an equivalent).
+- **Status subscriptions** are a fixed core set; making them configurable per blueprint would let a blueprint ask for more (passcode compliance, battery health, FileVault state).
+- **Apply modes**: `single` types (four of them) are de-duplicated by blueprint priority; `combined` types are left to the device, which merges them.
+- **Real devices**: the protocol is tested against recorded behavior and Apple's schema, not against hardware.
+
 ### Retiring profiles
 
 What the schemas say (not what is commonly assumed): declarative management is not new in 27. The status channel and legacy-profile declarations start at iOS 15 and macOS 13, and most native configurations at iOS 17 and macOS 14. What 27 adds is deprecation of profile payloads that now have declarations (DNS settings and proxy, relay, passcode policy, the new restrictions payload and content caching), the removal of the software-update commands, and `ProfileAssetReference` for legacy profiles. `InstallProfile` itself is not deprecated. And on macOS, most declaration types allow only supervised, user and local enrollments, so a Mac enrolled by hand (not through Apple Business Manager) cannot take them.

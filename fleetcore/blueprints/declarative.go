@@ -17,6 +17,7 @@ const (
 	typeSimpleActivation    = "com.apple.activation.simple"
 	typeEnforceSpecific     = "com.apple.configuration.softwareupdate.enforcement.specific"
 	typeLegacy              = "com.apple.configuration.legacy"
+	typeOrgInfo             = "com.apple.management.organization-info"
 )
 
 // statusItems are what every device is asked to report: enough to keep the inventory true, to know what the declarations did, and to follow a software update.
@@ -56,7 +57,7 @@ func declGate(d *Device, declType string) (ok bool, why string) {
 }
 
 // systemDeclarations are on every device that can take them: the status subscription, so the server hears what the device is running and what became of its declarations.
-func systemDeclarations(d *Device) []ddm.Declaration {
+func systemDeclarations(d *Device, org string) []ddm.Declaration {
 	if ok, _ := declGate(d, typeStatusSubscriptions); !ok {
 		return nil
 	}
@@ -77,10 +78,16 @@ func systemDeclarations(d *Device) []ddm.Declaration {
 		}
 		items = append(items, map[string]any{"Name": name})
 	}
-	return []ddm.Declaration{
+	out := []ddm.Declaration{
 		{Identifier: "fc.status", Kind: ddm.KindConfiguration, Type: typeStatusSubscriptions, Payload: map[string]any{"StatusItems": items}, Source: "system"},
 		{Identifier: "fc.status.act", Kind: ddm.KindActivation, Type: typeSimpleActivation, Payload: map[string]any{"StandardConfigurations": []any{"fc.status"}}, Source: "system"},
 	}
+	if org != "" {
+		if ok, _ := declGate(d, typeOrgInfo); ok {
+			out = append(out, ddm.Declaration{Identifier: "fc.org", Kind: ddm.KindManagement, Type: typeOrgInfo, Payload: map[string]any{"Name": org}, Source: "system"})
+		}
+	}
+	return out
 }
 
 func declIdentifier(bp, item string) string { return "fc." + bp + "." + item }
@@ -96,13 +103,8 @@ func declarationFor(bp *Blueprint, it Item) []ddm.Declaration {
 	return out
 }
 
-// osUpdateFor compiles an "os_update" item for one device. decls is nil when the device needs nothing (already there, or no update is on offer); note says why.
-func (e *Engine) osUpdateFor(d *Device, bp *Blueprint, it Item) (decls []ddm.Declaration, target string, note string, applicable bool) {
-	if ok, why := declGate(d, typeEnforceSpecific); !ok {
-		return nil, "", why, false
-	}
-	var rel osreleases.Release
-	var found bool
+// resolveTarget picks the release an os_update item moves this device to.
+func (e *Engine) resolveTarget(d *Device, it Item) (rel osreleases.Release, found bool) {
 	cur, _ := schemas.VersionNum(d.OSVersion)
 	switch it.Target {
 	case "latest":
@@ -123,6 +125,16 @@ func (e *Engine) osUpdateFor(d *Device, bp *Blueprint, it Item) (decls []ddm.Dec
 			}
 		}
 	}
+	return rel, found
+}
+
+// osUpdateFor compiles an "os_update" item for one device. decls is nil when the device needs nothing (already there, or no update is on offer); note says why.
+func (e *Engine) osUpdateFor(d *Device, bp *Blueprint, it Item) (decls []ddm.Declaration, target string, note string, applicable bool) {
+	if ok, why := declGate(d, typeEnforceSpecific); !ok {
+		return nil, "", why, false
+	}
+	cur, _ := schemas.VersionNum(d.OSVersion)
+	rel, found := e.resolveTarget(d, it)
 	if !found {
 		return nil, "", "Apple offers no matching update for this device right now", true
 	}

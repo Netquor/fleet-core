@@ -79,6 +79,9 @@ type Item struct {
 	DeadlineDays int    `bson:"deadline_days,omitempty" json:"deadline_days,omitempty"`
 	DeadlineHour *int   `bson:"deadline_hour,omitempty" json:"deadline_hour,omitempty"`
 	DetailsURL   string `bson:"details_url,omitempty" json:"details_url,omitempty"`
+	// InstallAction is used only for a device that cannot take declarative enforcement but still understands the MDM ScheduleOSUpdate command (below iOS 17, macOS 14, or
+	// before the command is removed in 27): Default (download and ask the user), DownloadOnly, InstallASAP, NotifyOnly, InstallLater or InstallForceRestart. Default is "Default".
+	InstallAction string `bson:"install_action,omitempty" json:"install_action,omitempty"`
 }
 
 // Hash identifies the item's content: when it changes, devices get the new version.

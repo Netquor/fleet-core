@@ -228,6 +228,7 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	engine := blueprints.New(bpStore, pushEnqueuer{pe}, profileRules, catalog, logger.With("service", "blueprints"), blueprints.Config{})
 	engine.DDM = ddmStore
 	engine.BaseURL = cfg.BaseURL
+	engine.Organization = cfg.Organization
 	ddmSvc.OnStatus = engine.OnStatus
 	// A new Apple release or schema changes what is out of date and what applies: look at every device again.
 	relFeed.OnChange = func([]osreleases.Release) {

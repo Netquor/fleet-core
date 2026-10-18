@@ -166,6 +166,13 @@ func (s *Store) SaveStatus(ctx context.Context, device string, raw []byte, rep R
 			set = append(set, bson.E{Key: "items." + safeKey(name), Value: x})
 		}
 	}
+	if len(rep.Errors) > 0 {
+		var errs []bson.M
+		for _, e := range rep.Errors {
+			errs = append(errs, bson.M{"item": e.StatusItem, "reasons": reasonText(e.Reasons)})
+		}
+		set = append(set, bson.E{Key: "errors", Value: errs})
+	}
 	_, err := s.db.Collection(cStatus).UpdateOne(ctx, bson.D{{Key: "_id", Value: s.key(device)}}, bson.D{{Key: "$set", Value: s.stamp(set)}}, options.UpdateOne().SetUpsert(true))
 	return err
 }

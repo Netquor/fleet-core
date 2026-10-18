@@ -127,3 +127,13 @@ func TestRefresherSwitchesAndRefusesShrunkenRelease(t *testing.T) {
 		t.Error("the good set was lost")
 	}
 }
+
+func TestCredentialDocumentsAreInTheSnapshot(t *testing.T) {
+	set := Embedded()
+	for _, ct := range []string{"com.apple.credential.scep", "com.apple.credential.acme"} {
+		c, ok := set.Credential(ct)
+		if !ok || len(c.Keys) == 0 {
+			t.Errorf("%s missing from the snapshot", ct)
+		}
+	}
+}

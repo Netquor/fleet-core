@@ -1,26 +1,83 @@
 {
- "com.apple.mobiledevice.passwordpolicy": ["com.apple.configuration.passcode.settings"],
- "com.apple.dnsSettings.managed": ["com.apple.configuration.network.dns-settings"],
- "com.apple.dnsProxy.managed": ["com.apple.configuration.network.dns-proxy"],
- "com.apple.relay.managed": ["com.apple.configuration.network.relay"],
- "com.apple.SoftwareUpdate": ["com.apple.configuration.softwareupdate.settings"],
- "com.apple.AssetCache.managed": ["com.apple.configuration.content-cache.settings"],
- "com.apple.caldav.account": ["com.apple.configuration.account.caldav"],
- "com.apple.carddav.account": ["com.apple.configuration.account.carddav"],
- "com.apple.eas.account": ["com.apple.configuration.account.exchange"],
- "com.apple.google-oauth": ["com.apple.configuration.account.google"],
- "com.apple.ldap.account": ["com.apple.configuration.account.ldap"],
- "com.apple.mail.managed": ["com.apple.configuration.account.mail"],
- "com.apple.subscribedcalendar.account": ["com.apple.configuration.account.subscribed-calendar"],
- "com.apple.vpn.managed": ["com.apple.configuration.network.vpn.ikev2", "com.apple.configuration.network.vpn.ipsec", "com.apple.configuration.network.vpn.vpn-plugin", "com.apple.configuration.network.vpn.always-on"],
- "com.apple.security.pem": ["com.apple.configuration.security.certificate"],
- "com.apple.security.root": ["com.apple.configuration.security.certificate"],
- "com.apple.security.pkcs1": ["com.apple.configuration.security.certificate"],
- "com.apple.security.pkcs12": ["com.apple.configuration.security.identity"],
- "com.apple.security.scep": ["com.apple.asset.credential.scep"],
- "com.apple.security.acme": ["com.apple.asset.credential.acme"],
- "com.apple.extensiblesso": ["com.apple.configuration.extensible-sso"],
- "com.apple.webcontent-filter": ["com.apple.configuration.webcontent-filter.plugin"],
- "com.apple.servicemanagement": ["com.apple.configuration.services.background-tasks"],
- "com.apple.applicationaccess": ["com.apple.configuration.accessibility.settings", "com.apple.configuration.siri.settings", "com.apple.configuration.intelligence.settings", "com.apple.configuration.keyboard.settings"]
+ "com.apple.mobiledevice.passwordpolicy": [
+  "com.apple.configuration.passcode.settings"
+ ],
+ "com.apple.dnsSettings.managed": [
+  "com.apple.configuration.network.dns-settings"
+ ],
+ "com.apple.dnsProxy.managed": [
+  "com.apple.configuration.network.dns-proxy"
+ ],
+ "com.apple.relay.managed": [
+  "com.apple.configuration.network.relay"
+ ],
+ "com.apple.SoftwareUpdate": [
+  "com.apple.configuration.softwareupdate.settings"
+ ],
+ "com.apple.AssetCache.managed": [
+  "com.apple.configuration.content-cache.settings"
+ ],
+ "com.apple.caldav.account": [
+  "com.apple.configuration.account.caldav"
+ ],
+ "com.apple.carddav.account": [
+  "com.apple.configuration.account.carddav"
+ ],
+ "com.apple.eas.account": [
+  "com.apple.configuration.account.exchange"
+ ],
+ "com.apple.google-oauth": [
+  "com.apple.configuration.account.google"
+ ],
+ "com.apple.ldap.account": [
+  "com.apple.configuration.account.ldap"
+ ],
+ "com.apple.mail.managed": [
+  "com.apple.configuration.account.mail"
+ ],
+ "com.apple.subscribedcalendar.account": [
+  "com.apple.configuration.account.subscribed-calendar"
+ ],
+ "com.apple.vpn.managed": [
+  "com.apple.configuration.network.vpn.ikev2",
+  "com.apple.configuration.network.vpn.ipsec",
+  "com.apple.configuration.network.vpn.vpn-plugin",
+  "com.apple.configuration.network.vpn.always-on"
+ ],
+ "com.apple.security.pem": [
+  "com.apple.configuration.security.certificate"
+ ],
+ "com.apple.security.root": [
+  "com.apple.configuration.security.certificate"
+ ],
+ "com.apple.security.pkcs1": [
+  "com.apple.configuration.security.certificate"
+ ],
+ "com.apple.security.pkcs12": [
+  "com.apple.configuration.security.identity"
+ ],
+ "com.apple.security.scep": [
+  "com.apple.asset.credential.scep"
+ ],
+ "com.apple.security.acme": [
+  "com.apple.asset.credential.acme"
+ ],
+ "com.apple.extensiblesso": [
+  "com.apple.configuration.extensible-sso"
+ ],
+ "com.apple.webcontent-filter": [
+  "com.apple.configuration.webcontent-filter.plugin"
+ ],
+ "com.apple.servicemanagement": [
+  "com.apple.configuration.services.background-tasks"
+ ],
+ "com.apple.applicationaccess": [
+  "com.apple.configuration.accessibility.settings",
+  "com.apple.configuration.siri.settings",
+  "com.apple.configuration.intelligence.settings",
+  "com.apple.configuration.keyboard.settings",
+  "com.apple.configuration.app.settings",
+  "com.apple.configuration.external-intelligence.settings",
+  "com.apple.configuration.softwareupdate.settings"
+ ]
 }

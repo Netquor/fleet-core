@@ -103,7 +103,7 @@ The MDM software-update commands are deprecated in 26 and removed in 27, so belo
 Still open, and honest about it:
 
 - Secrets in assets (passwords, identity data) are stored as given in the blueprint and in the download store. Encrypting them per tenant is part of the hardening list.
-- The translator covers the common payloads (see the coverage report) but not VPN, certificates, SCEP and ACME payloads (those need assets built by hand), and most of the restrictions payload, whose settings have no declaration yet.
+- The translator covers the common payloads, certificates, identities, SCEP and ACME (as assets), and the IKEv2, IPsec and plug-in VPNs (see the coverage report). Not covered: L2TP, PPTP, always-on and transparent proxy VPNs, the TCC privacy payload (its mapping into app privacy defaults is not described in the schemas), built-in content filters, and the restrictions Apple has not given a declaration yet.
 - Apple has no ordering between declarations beyond references and activations, so there is none here.
 - Nothing has been tried on real devices: the protocol is tested against Apple's schema and the documented behavior.
 
@@ -152,6 +152,6 @@ Everything in the earlier plan is built. What is left, honestly:
 
 1. **Real devices**: the protocol, ADE, BYOD, attestation, VPP and Platform SSO are tested against Apple's schemas, documented behavior and fakes (including a synthetic attestation chain). None has run against a real device, Business Manager or the App Store yet.
 2. **Event relay**: one change stream (or outbox) from the cluster to a message bus, for products that want events.
-3. **Translator**: SCEP and ACME assets (needs Apple's credential document schema), the other VPN kinds; more restriction settings as Apple adds declarations (the coverage report lists what to look at).
+3. **Translator**: always-on VPN, TCC privacy, and more restriction settings as Apple adds declarations (the coverage report lists what to look at).
 4. **UserAuthenticate** beyond the minimal digest round; **Platform SSO** presets for vendors other than Microsoft Entra.
 5. **Migration tooling** from other MDMs (device records, enrollments).

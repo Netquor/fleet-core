@@ -1,6 +1,7 @@
 package ddm
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -143,11 +144,25 @@ func TestAliasesFollowTheSchemas(t *testing.T) {
 				}
 				continue
 			}
-			if strings.HasPrefix(from, "IKEv2.") && a.Decl != "" { // lifted: the target is a path in the declaration
-				if d, _ := set.Declaration(a.Decl); d == nil {
-					t.Errorf("%s: %s names a declaration the schemas lack", pt, from)
-				} else if _, ok := resolve(d.Keys, a.To); !ok {
-					t.Errorf("%s: %s -> %s is not in %s", pt, from, a.To, a.Decl)
+			if a.Decl != "" {
+				for _, dt := range strings.Split(a.Decl, ",") {
+					found := false
+					for _, e := range equiv {
+						found = found || e == dt
+					}
+					if !found {
+						t.Errorf("%s: %s names %s, which is not an equivalent of the payload", pt, from, dt)
+					}
+				}
+			}
+			if a.Decl != "" && (strings.Count(from, ".") == 0 || strings.HasPrefix(from, "IKEv2.") || strings.HasPrefix(from, "IPSec.") || strings.HasPrefix(from, "VPN.")) {
+				// the target is a path in each named declaration
+				for _, dt := range strings.Split(a.Decl, ",") {
+					if d, _ := set.Declaration(dt); d == nil {
+						t.Errorf("%s: %s names a declaration the schemas lack", pt, from)
+					} else if _, ok := resolve(d.Keys, a.To); !ok {
+						t.Errorf("%s: %s -> %s is not in %s", pt, from, a.To, dt)
+					}
 				}
 				continue
 			}
@@ -259,5 +274,134 @@ func TestCertificateReferencesFromOtherPayloads(t *testing.T) {
 	ds, _ := tr.Payload["DNSSettings"].(map[string]any)
 	if ds["IdentityAssetReference"] != "$asset:"+CertAssetID("ID-9") || ds["ServerName"] != "dns.example.com" {
 		t.Errorf("%v", tr.Payload)
+	}
+}
+
+func TestTranslateSCEPAndACMEToCredentialAssets(t *testing.T) {
+	set := schemas.Embedded()
+	tr, ok := Translate("com.apple.security.scep", map[string]any{"PayloadUUID": "S-1", "PayloadContent": map[string]any{
+		"URL": "https://scep.example.com", "Name": "CA", "Keysize": uint64(2048), "Key Type": "RSA", "Key Usage": uint64(5), "Challenge": "abc",
+		"Subject":        []any{[]any{[]any{"CN", "device"}}, []any{[]any{"O", "Example"}}},
+		"SubjectAltName": map[string]any{"dNSName": "d.example.com"},
+	}}, "", set)
+	if !ok || len(tr.Assets) != 1 || tr.Declaration != "com.apple.asset.credential.scep" {
+		t.Fatalf("%+v", tr)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(tr.Assets[0].Data, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc["URL"] != "https://scep.example.com" || doc["Keysize"] != float64(2048) || doc["Key Type"] != "RSA" || doc["Challenge"] != "abc" {
+		t.Errorf("doc %v", doc)
+	}
+	if subj, _ := doc["Subject"].([]any); len(subj) != 2 {
+		t.Errorf("subject %v", doc["Subject"])
+	}
+	if tr.Assets[0].ID != CertAssetID("S-1") || tr.Assets[0].ContentType != "application/json" || tr.Approximate["Challenge"] == "" {
+		t.Errorf("asset %+v approx %v", tr.Assets[0], tr.Approximate)
+	}
+	// a key size the credential does not allow is not delivered
+	bad, _ := Translate("com.apple.security.scep", map[string]any{"PayloadContent": map[string]any{"URL": "https://x", "Keysize": uint64(512)}}, "", set)
+	if len(bad.Assets) == 1 && strings.Contains(string(bad.Assets[0].Data), "512") || bad.Reasons["PayloadContent.Keysize"] == "" {
+		t.Errorf("keysize: %+v", bad)
+	}
+	acme, _ := Translate("com.apple.security.acme", map[string]any{
+		"PayloadUUID": "A-1", "DirectoryURL": "https://acme.example.com/dir", "ClientIdentifier": "id", "KeySize": uint64(384), "KeyType": "ECSECPrimeRandom",
+		"HardwareBound": true, "Attest": true, "Subject": []any{[]any{[]any{"CN", "x"}}},
+	}, "", set)
+	if len(acme.Assets) != 1 || acme.Assets[0].DeclarationType != "com.apple.asset.credential.acme" || len(acme.Untranslated) != 0 {
+		t.Errorf("acme %+v", acme)
+	}
+	// a required key that is missing is reported
+	miss, _ := Translate("com.apple.security.acme", map[string]any{"DirectoryURL": "https://x"}, "", set)
+	if miss.Reasons["ClientIdentifier"] == "" {
+		t.Errorf("missing required: %+v", miss.Reasons)
+	}
+}
+
+func TestTranslateIPSecAndPluginVPN(t *testing.T) {
+	set := schemas.Embedded()
+	trs, _ := TranslateAll("com.apple.vpn.managed", map[string]any{
+		"VPNType": "IPSec", "UserDefinedName": "Cisco",
+		"IPSec": map[string]any{"RemoteAddress": "ipsec.example.com", "AuthenticationMethod": "SharedSecret", "LocalIdentifier": "grp", "XAuthEnabled": uint64(1), "SharedSecret": []byte("x"), "XAuthName": "u"},
+	}, set)
+	if len(trs) != 1 || trs[0].Declaration != vpnIPSec {
+		t.Fatalf("%+v", trs)
+	}
+	au, _ := trs[0].Payload["Authentication"].(map[string]any)
+	xa, _ := au["XAuth"].(map[string]any)
+	if trs[0].Payload["HostName"] != "ipsec.example.com" || au["Method"] != "SharedSecret" || au["LocalIdentifier"] != "grp" || xa["Enabled"] != true {
+		t.Errorf("payload %v", trs[0].Payload)
+	}
+	if trs[0].Reasons["IPSec.SharedSecret"] == "" || strings.Contains(fmt.Sprint(trs[0].Payload), "SharedSecret\":") {
+		t.Errorf("secrets: %v", trs[0].Reasons)
+	}
+	trs, _ = TranslateAll("com.apple.vpn.managed", map[string]any{
+		"VPNType": "VPN", "VPNSubType": "com.vendor.vpn", "UserDefinedName": "Vendor",
+		"VPN":          map[string]any{"RemoteAddress": "v.example.com", "AuthenticationMethod": "Password", "ProviderType": "packet-tunnel", "IncludeAllNetworks": uint64(0)},
+		"VendorConfig": map[string]any{"Realm": "corp"},
+	}, set)
+	if len(trs) != 1 || trs[0].Declaration != vpnPlugin {
+		t.Fatalf("%+v", trs)
+	}
+	p := trs[0].Payload
+	pv, _ := p["Provider"].(map[string]any)
+	vc, _ := p["VendorConfig"].(map[string]any)
+	nr, _ := p["NetworkRouting"].(map[string]any)
+	if p["SubType"] != "com.vendor.vpn" || p["HostName"] != "v.example.com" || pv["Type"] != "packet-tunnel" || vc["Realm"] != "corp" || nr["IncludeAllNetworks"] != false {
+		t.Errorf("payload %v", p)
+	}
+}
+
+func TestTranslateMoreRestrictions(t *testing.T) {
+	set := schemas.Embedded()
+	trs, _ := TranslateAll("com.apple.applicationaccess", map[string]any{
+		"allowExternalIntelligenceIntegrations": false, "blockedAppBundleIDs": []any{"com.example.game"},
+		"enforcedSoftwareUpdateMajorOSDeferredInstallDelay": uint64(30), "allowRapidSecurityResponseRemoval": false, "allowKeyboardShortcuts": false,
+	}, set)
+	got := map[string]map[string]any{}
+	reasons := map[string]string{}
+	for _, tr := range trs {
+		got[tr.Declaration] = tr.Payload
+		for k, v := range tr.Reasons {
+			reasons[k] = v
+		}
+	}
+	apps, _ := got["com.apple.configuration.app.settings"]["Allowed"].(map[string]any)
+	defer_, _ := got["com.apple.configuration.softwareupdate.settings"]["Deferrals"].(map[string]any)
+	rsr, _ := got["com.apple.configuration.softwareupdate.settings"]["RapidSecurityResponse"].(map[string]any)
+	if got["com.apple.configuration.external-intelligence.settings"]["Enabled"] != false || fmt.Sprint(apps["DeniedApps"]) != "[com.example.game]" ||
+		defer_["MajorPeriodInDays"] != int64(30) || rsr["EnableRollback"] != false {
+		t.Errorf("got %v", got)
+	}
+	if reasons["allowKeyboardShortcuts"] == "" {
+		t.Errorf("reasons %v", reasons)
+	}
+}
+
+// A profile key must not be claimed by two declarations, or a setting would be delivered twice with different effects.
+func TestNoKeyIsClaimedTwice(t *testing.T) {
+	set := schemas.Embedded()
+	prof, _ := set.Profile("com.apple.applicationaccess")
+	payload := map[string]any{}
+	for _, k := range prof.Keys {
+		switch k.Type {
+		case "boolean":
+			payload[k.Key] = false
+		}
+	}
+	owners := map[string][]string{}
+	for _, dt := range Equivalents()["com.apple.applicationaccess"] {
+		_, claimed, _ := translateOne("com.apple.applicationaccess", payload, dt, set)
+		for k, c := range claimed {
+			if c {
+				owners[k] = append(owners[k], dt)
+			}
+		}
+	}
+	for k, o := range owners {
+		if len(o) > 1 {
+			t.Errorf("%s is taken by %v", k, o)
+		}
 	}
 }

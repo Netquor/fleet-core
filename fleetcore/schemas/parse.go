@@ -174,6 +174,10 @@ func (s *Set) Add(kind string, data []byte) error {
 		if dt := str(payload["declarationtype"]); dt != "" {
 			s.Declarations = append(s.Declarations, &Declaration{Type: dt, Kind: kind, Title: str(top["title"]), Description: str(top["description"]), Apply: str(payload["apply"]), OS: osOf(payload["supportedOS"]), Keys: keysOf(top["payloadkeys"])})
 		}
+	case "credential":
+		if ct := str(payload["credentialtype"]); ct != "" {
+			s.Credentials = append(s.Credentials, &Credential{Type: ct, Title: str(top["title"]), Description: str(top["description"]), OS: osOf(payload["supportedOS"]), Keys: keysOf(top["payloadkeys"])})
+		}
 	case "status":
 		if n := str(payload["statusitemtype"]); n != "" {
 			s.StatusItems = append(s.StatusItems, &StatusItem{Name: n, Title: str(top["title"]), Description: str(top["description"]), OS: osOf(payload["supportedOS"])})
@@ -192,7 +196,7 @@ func ParseDir(root, ref string) (*Set, error) {
 	for _, d := range []struct{ kind, dir string }{
 		{"commands", "mdm/commands"}, {"profiles", "mdm/profiles"},
 		{"configuration", "declarative/declarations/configurations"}, {"activation", "declarative/declarations/activations"},
-		{"asset", "declarative/declarations/assets"}, {"management", "declarative/declarations/management"}, {"status", "declarative/status"},
+		{"asset", "declarative/declarations/assets"}, {"credential", "declarative/declarations/assets/credentials"}, {"management", "declarative/declarations/management"}, {"status", "declarative/status"},
 	} {
 		entries, err := os.ReadDir(path.Join(root, d.dir))
 		if err != nil {
@@ -235,7 +239,7 @@ func ParseTarGz(r io.Reader, ref string) (*Set, error) {
 		for marker, k := range map[string]string{
 			"/mdm/commands/": "commands", "/mdm/profiles/": "profiles",
 			"/declarative/declarations/configurations/": "configuration", "/declarative/declarations/activations/": "activation",
-			"/declarative/declarations/assets/": "asset", "/declarative/declarations/management/": "management", "/declarative/status/": "status",
+			"/declarative/declarations/assets/": "asset", "/declarative/declarations/assets/credentials/": "credential", "/declarative/declarations/management/": "management", "/declarative/status/": "status",
 		} {
 			if strings.Contains(h.Name, marker) && !strings.Contains(strings.SplitN(h.Name, marker, 2)[1], "/") {
 				kind = k

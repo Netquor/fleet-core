@@ -30,7 +30,7 @@ type alias struct {
 	Lift bool `json:"lift,omitempty"`
 	// Ref marks a value that is the PayloadUUID of a certificate payload in the same profile; it becomes a reference to the asset that payload translates to.
 	Ref bool `json:"ref,omitempty"`
-	// Decl limits the alias to one declaration type (a payload that several declarations replace).
+	// Decl limits the alias to the declaration types listed, comma separated (a payload that several declarations replace).
 	Decl string `json:"decl,omitempty"`
 	// Ignore marks a key that only selects how the payload is translated and has nothing to carry over.
 	Ignore bool `json:"ignore,omitempty"`
@@ -160,7 +160,7 @@ func (t *translator) object(in map[string]any, defs []schemas.Key, prefix string
 		}
 		top := prefix == ""
 		a, hasAlias := t.aliases[path]
-		if hasAlias && a.Decl != "" && a.Decl != t.tr.Declaration {
+		if hasAlias && a.Decl != "" && !declIn(a.Decl, t.tr.Declaration) {
 			hasAlias = false
 		}
 		if hasAlias && a.Ignore {
@@ -239,6 +239,15 @@ func (t *translator) object(in map[string]any, defs []schemas.Key, prefix string
 	}
 }
 
+func declIn(list, decl string) bool {
+	for _, d := range strings.Split(list, ",") {
+		if d == decl {
+			return true
+		}
+	}
+	return false
+}
+
 func integral(v any) (int64, bool) {
 	switch n := v.(type) {
 	case int:
@@ -302,6 +311,17 @@ func (t *translator) convert(val any, def schemas.Key, path string) (any, string
 		i, ok := integral(val)
 		if !ok {
 			return nil, fmt.Sprintf("%s is an integer in the declaration; the profile has %v", def.Key, val)
+		}
+		if len(def.Allowed) > 0 {
+			ok = false
+			for _, a := range def.Allowed {
+				if f, isNum := number(a); isNum && f == float64(i) {
+					ok = true
+				}
+			}
+			if !ok {
+				return nil, fmt.Sprintf("%d is not one of the values %v allows", i, def.Allowed)
+			}
 		}
 		if def.Min != nil && float64(i) < *def.Min {
 			return nil, fmt.Sprintf("%d is below the minimum %v", i, *def.Min)
@@ -377,7 +397,11 @@ func (t *translator) finish() {
 }
 
 // certificateKinds are the profile payloads that carry a certificate or identity by value; the declaration refers to an asset that holds it instead.
-const vpnIKEv2 = "com.apple.configuration.network.vpn.ikev2"
+const (
+	vpnIKEv2  = "com.apple.configuration.network.vpn.ikev2"
+	vpnIPSec  = "com.apple.configuration.network.vpn.ipsec"
+	vpnPlugin = "com.apple.configuration.network.vpn.vpn-plugin"
+)
 
 var certificateKinds = map[string]string{
 	"com.apple.security.pem":    "com.apple.asset.credential.certificate",
@@ -432,6 +456,54 @@ func (t *translator) certificate(payload map[string]any, assetType string, def *
 	}
 }
 
+// credentialKinds are the profile payloads for an identity the device creates (SCEP, ACME): the asset's data is a JSON document with the payload's own keys.
+var credentialKinds = map[string]string{
+	"com.apple.security.scep": "com.apple.credential.scep",
+	"com.apple.security.acme": "com.apple.credential.acme",
+}
+
+// credential builds the credential document of a SCEP or ACME payload, checked against Apple's schema for that document, as an asset.
+func (t *translator) credential(payload map[string]any, credType string, set *schemas.Set) {
+	cred, ok := set.Credential(credType)
+	if !ok {
+		t.unmapped("PayloadContent", "the pinned schemas do not describe "+credType)
+		return
+	}
+	in := payload
+	prefix := ""
+	if c, ok := payload["PayloadContent"].(map[string]any); ok { // SCEP wraps its settings
+		in, prefix = c, "PayloadContent."
+	}
+	doc := map[string]any{}
+	t.object(in, cred.Keys, prefix, doc)
+	for _, k := range cred.Keys {
+		if _, has := doc[k.Key]; k.Required && !has {
+			t.unmapped(prefix+k.Key, "required by "+credType)
+		}
+	}
+	if len(doc) == 0 {
+		return
+	}
+	body, err := json.Marshal(doc)
+	if err != nil {
+		t.unmapped("PayloadContent", err.Error())
+		return
+	}
+	uuid, _ := payload["PayloadUUID"].(string)
+	id := CertAssetID(uuid)
+	if uuid == "" {
+		sum := sha256.Sum256(body)
+		id = "cert-" + hex.EncodeToString(sum[:4])
+	}
+	assetType := "com.apple.asset.credential." + credType[strings.LastIndex(credType, ".")+1:]
+	t.tr.Assets = append(t.tr.Assets, Asset{ID: id, DeclarationType: assetType, ContentType: "application/json", Data: body})
+	t.tr.Declaration = assetType
+	t.claimed["PayloadContent"] = true
+	if _, has := doc["Challenge"]; has {
+		t.tr.Approximate["Challenge"] = "the challenge is stored in the asset document, which the server hosts behind the device's identity and seals at rest; prefer a dynamic challenge"
+	}
+}
+
 func translateOne(payloadType string, payload map[string]any, declType string, set *schemas.Set) (*Translation, map[string]bool, bool) {
 	def, ok := set.Declaration(declType)
 	if !ok {
@@ -442,8 +514,13 @@ func translateOne(payloadType string, payload map[string]any, declType string, s
 		tr:      &Translation{Declaration: declType, Payload: map[string]any{}, Approximate: map[string]string{}},
 		claimed: map[string]bool{},
 	}
-	if kind, ok := certificateKinds[payloadType]; ok {
+	if ft, _ := payload["FilterType"].(string); payloadType == "com.apple.webcontent-filter" && ft != "Plugin" {
+		t.claimed["FilterType"] = true
+		t.unmapped("FilterType", "only plug-in content filters have a declaration; the built-in filter stays a profile")
+	} else if kind, ok := certificateKinds[payloadType]; ok {
 		t.certificate(payload, kind, def)
+	} else if ct, ok := credentialKinds[payloadType]; ok {
+		t.credential(payload, ct, set)
 	} else {
 		t.object(payload, def.Keys, "", t.tr.Payload)
 	}
@@ -484,14 +561,18 @@ func TranslateAll(payloadType string, payload map[string]any, set *schemas.Set) 
 		return nil, false
 	}
 	if payloadType == "com.apple.vpn.managed" {
-		// The VPN declarations are one per kind; the payload says which kind it is. Only IKEv2 is translated.
+		// The VPN declarations are one per kind; the payload says which kind it is. L2TP, PPTP, transparent proxy and always-on have no translation.
+		want := map[string]string{"IKEv2": vpnIKEv2, "IPSec": vpnIPSec, "VPN": vpnPlugin}[fmt.Sprint(payload["VPNType"])]
 		kept := equiv[:0:0]
 		for _, e := range equiv {
-			if t, _ := payload["VPNType"].(string); t == "IKEv2" && e == vpnIKEv2 || t != "IKEv2" && e != vpnIKEv2 {
+			if e == want {
 				kept = append(kept, e)
 			}
 		}
 		equiv = kept
+		if len(equiv) == 0 {
+			equiv = Equivalents()[payloadType][:1] // report against one declaration so the reasons are returned
+		}
 	}
 	var out []*Translation
 	claimedBy := map[string]bool{}
@@ -510,6 +591,12 @@ func TranslateAll(payloadType string, payload map[string]any, set *schemas.Set) 
 	}
 	if len(all) == 0 {
 		return nil, false
+	}
+	saved := map[string]string{} // reasons for keys no declaration took, kept for the report below
+	for _, tr := range all {
+		for k, why := range tr.Reasons {
+			saved[k] = why
+		}
 	}
 	for i, tr := range all {
 		// Keep only problems with keys this declaration took (nested values that do not fit); a key it does not have is reported below if no declaration has it.
@@ -542,13 +629,11 @@ func TranslateAll(payloadType string, payload map[string]any, set *schemas.Set) 
 		out[0].Untranslated = append(out[0].Untranslated, orphan...)
 		sort.Strings(out[0].Untranslated)
 		for _, k := range orphan {
-			for _, tr := range all {
-				if why := tr.Reasons[k]; why != "" {
-					if out[0].Reasons == nil {
-						out[0].Reasons = map[string]string{}
-					}
-					out[0].Reasons[k] = why
+			if why := saved[k]; why != "" {
+				if out[0].Reasons == nil {
+					out[0].Reasons = map[string]string{}
 				}
+				out[0].Reasons[k] = why
 			}
 		}
 	}
@@ -566,39 +651,91 @@ type CoverageRow struct {
 	DeclOnly    []string `json:"declaration_only,omitempty"`
 }
 
+// coverageKeys lists the profile keys a payload type is judged on: its top-level keys, with the dictionaries that are translated as if lifted
+// (VPN settings, URL filter parameters) replaced by their own keys, and the credential document's keys for SCEP and ACME, whose settings are the document.
+func coverageKeys(set *schemas.Set, pt string, prof *schemas.Profile, decl string, table map[string]alias) []string {
+	if ct, ok := credentialKinds[pt]; ok {
+		if c, ok := set.Credential(ct); ok {
+			var out []string
+			for _, k := range c.Keys {
+				out = append(out, k.Key)
+			}
+			return out
+		}
+	}
+	var out []string
+	for _, k := range prof.Keys {
+		if strings.HasPrefix(k.Key, "Payload") {
+			continue
+		}
+		if a, has := table[k.Key]; has && a.Lift {
+			if a.Decl == "" || declIn(a.Decl, decl) {
+				for _, c := range children(k) {
+					out = append(out, k.Key+"."+c.Key)
+				}
+			}
+			continue // a lifted dictionary of another kind of declaration is not this one's business
+		}
+		out = append(out, k.Key)
+	}
+	return out
+}
+
 // Coverage reports, for every payload type that has a native declaration, how many of its profile keys translate, how many have a documented reason not to,
 // and which have neither (these are the ones to look at after a schema update). Keys claimed by another declaration of the same payload type count there.
 func Coverage(set *schemas.Set) []CoverageRow {
 	table := aliasTable()
 	var rows []CoverageRow
-	types := EquivalentTypes()
-	for _, pt := range types {
+	for _, pt := range EquivalentTypes() {
 		prof, ok := set.Profile(pt)
 		if !ok {
 			continue
 		}
 		equiv := Equivalents()[pt]
-		// A profile key counts as translated if any declaration has it.
-		claimed := map[string]string{} // key -> declaration
-		explained := map[string]bool{}
+		// What each declaration takes, judged from the schemas and the alias table.
+		type verdict struct {
+			by        string
+			explained bool
+		}
+		verdicts := map[string]*verdict{}
+		perDecl := map[string][]string{}
 		for _, dt := range equiv {
 			decl, ok := set.Declaration(dt)
 			if !ok {
 				continue
 			}
-			for _, k := range prof.Keys {
-				if _, isCert := certificateKinds[pt]; isCert && k.Key == "PayloadContent" {
-					claimed[k.Key] = dt
-				} else if _, isCert := certificateKinds[pt]; isCert && k.Key == "Password" {
-					explained[k.Key] = true
-				} else if a, has := table[pt][k.Key]; has {
-					if a.To == "" {
-						explained[k.Key] = true
-					} else if _, ok := resolve(decl.Keys, a.To); ok && claimed[k.Key] == "" {
-						claimed[k.Key] = dt
+			keys := coverageKeys(set, pt, prof, dt, table[pt])
+			perDecl[dt] = keys
+			for _, key := range keys {
+				v := verdicts[key]
+				if v == nil {
+					v = &verdict{}
+					verdicts[key] = v
+				}
+				a, has := table[pt][key]
+				if has && a.Decl != "" && !declIn(a.Decl, dt) {
+					has = false
+				}
+				switch {
+				case has && (a.Ignore || a.Lift):
+					if v.by == "" {
+						v.by = dt
 					}
-				} else if _, ok := findKey(decl.Keys, k.Key); ok && claimed[k.Key] == "" {
-					claimed[k.Key] = dt
+				case has && a.To == "":
+					v.explained = true
+				case has:
+					if _, ok := resolve(decl.Keys, a.To); ok && v.by == "" {
+						v.by = dt
+					}
+				case certificateKinds[pt] != "" || credentialKinds[pt] != "":
+					if v.by == "" {
+						v.by = dt
+					}
+				default:
+					leaf := key[strings.LastIndex(key, ".")+1:]
+					if _, ok := findKey(decl.Keys, leaf); ok && v.by == "" {
+						v.by = dt
+					}
 				}
 			}
 		}
@@ -608,20 +745,18 @@ func Coverage(set *schemas.Set) []CoverageRow {
 				continue
 			}
 			row := CoverageRow{PayloadType: pt, Declaration: dt}
-			for _, k := range prof.Keys {
-				if strings.HasPrefix(k.Key, "Payload") {
-					continue
-				}
+			for _, key := range perDecl[dt] {
 				row.ProfileKeys++
+				v := verdicts[key]
 				switch {
-				case claimed[k.Key] == dt:
+				case v.by == dt:
 					row.Translated++
-				case claimed[k.Key] != "":
+				case v.by != "":
 					// translated by another declaration of this payload type
-				case explained[k.Key]:
+				case v.explained:
 					row.Explained++
 				default:
-					row.Unmapped = append(row.Unmapped, k.Key)
+					row.Unmapped = append(row.Unmapped, key)
 				}
 			}
 			taken := map[string]bool{}

@@ -153,11 +153,29 @@ type Set struct {
 	// Declarations and StatusItems are the declarative management definitions.
 	Declarations []*Declaration `json:"declarations,omitempty"`
 	StatusItems  []*StatusItem  `json:"status_items,omitempty"`
+	// Credentials are the documents a credential asset downloads (SCEP, ACME, identity, user name and password), keyed by credential type.
+	Credentials []*Credential `json:"credentials,omitempty"`
 
+	creds map[string]*Credential
 	cmds  map[string]*Command
 	profs map[string]*Profile
 	decls map[string]*Declaration
 	stats map[string]*StatusItem
+}
+
+// Credential is the schema of the JSON document behind a credential asset.
+type Credential struct {
+	Type        string            `json:"type"` // com.apple.credential.scep
+	Title       string            `json:"title"`
+	Description string            `json:"description,omitempty"`
+	OS          map[string]OSInfo `json:"os,omitempty"`
+	Keys        []Key             `json:"keys,omitempty"`
+}
+
+// Credential returns the schema of a credential document type.
+func (s *Set) Credential(credType string) (*Credential, bool) {
+	c, ok := s.creds[credType]
+	return c, ok
 }
 
 // Declaration returns the definition of a declaration type.
@@ -192,6 +210,11 @@ func (s *Set) index() {
 	for _, d := range s.StatusItems {
 		s.stats[d.Name] = d
 	}
+	s.creds = make(map[string]*Credential, len(s.Credentials))
+	for _, c := range s.Credentials {
+		s.creds[c.Type] = c
+	}
+	sort.Slice(s.Credentials, func(i, j int) bool { return s.Credentials[i].Type < s.Credentials[j].Type })
 	sort.Slice(s.Declarations, func(i, j int) bool { return s.Declarations[i].Type < s.Declarations[j].Type })
 	sort.Slice(s.StatusItems, func(i, j int) bool { return s.StatusItems[i].Name < s.StatusItems[j].Name })
 	for _, c := range s.Commands {
